@@ -13,6 +13,7 @@ mod db;
 mod errors;
 mod handlers;
 mod models;
+mod queries;
 mod services;
 
 use actix_web::{middleware::Logger, web, App, HttpServer};

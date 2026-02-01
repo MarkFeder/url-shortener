@@ -10,6 +10,7 @@ use rusqlite::params;
 use crate::db::{get_conn, DbPool};
 use crate::errors::AppError;
 use crate::models::{ClickLog, CreateUrlRequest, ListUrlsQuery, Url};
+use crate::queries::{ClickLogs, Urls};
 
 /// Characters used for generating short codes (URL-safe)
 const ALPHABET: [char; 62] = [
@@ -85,11 +86,7 @@ pub fn create_url(
             .to_string()
     });
 
-    // Insert into database
-    conn.execute(
-        "INSERT INTO urls (short_code, original_url, expires_at) VALUES (?1, ?2, ?3)",
-        params![short_code, request.url, expires_at],
-    )?;
+    conn.execute(Urls::INSERT, params![short_code, request.url, expires_at])?;
 
     // Retrieve the created URL
     let url = get_url_by_code(pool, &short_code)?;
@@ -100,11 +97,7 @@ pub fn create_url(
 
 /// Check if a short code already exists
 fn code_exists(conn: &rusqlite::Connection, code: &str) -> Result<bool, AppError> {
-    let count: i32 = conn.query_row(
-        "SELECT COUNT(*) FROM urls WHERE short_code = ?1",
-        params![code],
-        |row| row.get(0),
-    )?;
+    let count: i32 = conn.query_row(Urls::COUNT_BY_CODE, params![code], |row| row.get(0))?;
     Ok(count > 0)
 }
 
@@ -120,11 +113,7 @@ pub fn get_url_by_code(pool: &DbPool, short_code: &str) -> Result<Url, AppError>
     let conn = get_conn(pool)?;
 
     let url = conn
-        .query_row(
-            "SELECT id, short_code, original_url, clicks, created_at, updated_at, expires_at
-             FROM urls WHERE short_code = ?1",
-            params![short_code],
-            |row| {
+        .query_row(Urls::SELECT_BY_CODE, params![short_code], |row| {
                 Ok(Url {
                     id: row.get(0)?,
                     short_code: row.get(1)?,
@@ -170,11 +159,7 @@ pub fn get_url_by_code(pool: &DbPool, short_code: &str) -> Result<Url, AppError>
 pub fn get_url_by_id(pool: &DbPool, id: i64) -> Result<Url, AppError> {
     let conn = get_conn(pool)?;
 
-    conn.query_row(
-        "SELECT id, short_code, original_url, clicks, created_at, updated_at, expires_at
-         FROM urls WHERE id = ?1",
-        params![id],
-        |row| {
+    conn.query_row(Urls::SELECT_BY_ID, params![id], |row| {
             Ok(Url {
                 id: row.get(0)?,
                 short_code: row.get(1)?,
@@ -213,14 +198,7 @@ pub fn list_urls(pool: &DbPool, query: &ListUrlsQuery) -> Result<Vec<Url>, AppEr
         _ => "DESC",
     };
 
-    let sql = format!(
-        "SELECT id, short_code, original_url, clicks, created_at, updated_at, expires_at
-         FROM urls
-         ORDER BY created_at {}
-         LIMIT ?1 OFFSET ?2",
-        sort_order
-    );
-
+    let sql = Urls::list_with_order(sort_order);
     let mut stmt = conn.prepare(&sql)?;
     let urls = stmt
         .query_map(params![limit, offset], |row| {
@@ -242,7 +220,7 @@ pub fn list_urls(pool: &DbPool, query: &ListUrlsQuery) -> Result<Vec<Url>, AppEr
 /// Get total count of URLs
 pub fn count_urls(pool: &DbPool) -> Result<usize, AppError> {
     let conn = get_conn(pool)?;
-    let count: i64 = conn.query_row("SELECT COUNT(*) FROM urls", [], |row| row.get(0))?;
+    let count: i64 = conn.query_row(Urls::COUNT_ALL, [], |row| row.get(0))?;
     Ok(count as usize)
 }
 
@@ -263,15 +241,9 @@ pub fn record_click(
 ) -> Result<(), AppError> {
     let conn = get_conn(pool)?;
 
-    // Increment click counter
+    conn.execute(Urls::INCREMENT_CLICKS, params![url_id])?;
     conn.execute(
-        "UPDATE urls SET clicks = clicks + 1, updated_at = datetime('now') WHERE id = ?1",
-        params![url_id],
-    )?;
-
-    // Log the click for analytics
-    conn.execute(
-        "INSERT INTO click_logs (url_id, ip_address, user_agent, referer) VALUES (?1, ?2, ?3, ?4)",
+        ClickLogs::INSERT,
         params![url_id, ip_address, user_agent, referer],
     )?;
 
@@ -281,14 +253,7 @@ pub fn record_click(
 /// Get click logs for a URL
 pub fn get_click_logs(pool: &DbPool, url_id: i64, limit: u32) -> Result<Vec<ClickLog>, AppError> {
     let conn = get_conn(pool)?;
-
-    let mut stmt = conn.prepare(
-        "SELECT id, url_id, clicked_at, ip_address, user_agent, referer
-         FROM click_logs
-         WHERE url_id = ?1
-         ORDER BY clicked_at DESC
-         LIMIT ?2",
-    )?;
+    let mut stmt = conn.prepare(ClickLogs::SELECT_BY_URL_ID)?;
 
     let logs = stmt
         .query_map(params![url_id, limit], |row| {
@@ -317,7 +282,7 @@ pub fn get_click_logs(pool: &DbPool, url_id: i64, limit: u32) -> Result<Vec<Clic
 pub fn delete_url(pool: &DbPool, id: i64) -> Result<(), AppError> {
     let conn = get_conn(pool)?;
 
-    let rows_affected = conn.execute("DELETE FROM urls WHERE id = ?1", params![id])?;
+    let rows_affected = conn.execute(Urls::DELETE_BY_ID, params![id])?;
 
     if rows_affected == 0 {
         return Err(AppError::NotFound(format!(

@@ -6,6 +6,7 @@ use r2d2::{Pool, PooledConnection};
 use r2d2_sqlite::SqliteConnectionManager;
 
 use crate::errors::AppError;
+use crate::queries::Schema;
 
 /// Type alias for the SQLite connection pool
 pub type DbPool = Pool<SqliteConnectionManager>;
@@ -42,42 +43,14 @@ pub fn run_migrations(pool: &DbPool) -> Result<(), AppError> {
         .get()
         .map_err(|e| AppError::DatabaseError(format!("Failed to get connection: {}", e)))?;
 
-    // Create the urls table
-    conn.execute(
-        "CREATE TABLE IF NOT EXISTS urls (
-            id              INTEGER PRIMARY KEY AUTOINCREMENT,
-            short_code      TEXT NOT NULL UNIQUE,
-            original_url    TEXT NOT NULL,
-            clicks          INTEGER NOT NULL DEFAULT 0,
-            created_at      TEXT NOT NULL DEFAULT (datetime('now')),
-            updated_at      TEXT NOT NULL DEFAULT (datetime('now')),
-            expires_at      TEXT
-        )",
-        [],
-    )
-    .map_err(|e| AppError::DatabaseError(format!("Failed to create urls table: {}", e)))?;
+    conn.execute(Schema::CREATE_URLS_TABLE, [])
+        .map_err(|e| AppError::DatabaseError(format!("Failed to create urls table: {}", e)))?;
 
-    // Create index on short_code for fast lookups
-    conn.execute(
-        "CREATE INDEX IF NOT EXISTS idx_short_code ON urls (short_code)",
-        [],
-    )
-    .map_err(|e| AppError::DatabaseError(format!("Failed to create index: {}", e)))?;
+    conn.execute(Schema::CREATE_SHORT_CODE_INDEX, [])
+        .map_err(|e| AppError::DatabaseError(format!("Failed to create index: {}", e)))?;
 
-    // Create the clicks table for detailed analytics (optional feature)
-    conn.execute(
-        "CREATE TABLE IF NOT EXISTS click_logs (
-            id              INTEGER PRIMARY KEY AUTOINCREMENT,
-            url_id          INTEGER NOT NULL,
-            clicked_at      TEXT NOT NULL DEFAULT (datetime('now')),
-            ip_address      TEXT,
-            user_agent      TEXT,
-            referer         TEXT,
-            FOREIGN KEY (url_id) REFERENCES urls (id) ON DELETE CASCADE
-        )",
-        [],
-    )
-    .map_err(|e| AppError::DatabaseError(format!("Failed to create click_logs table: {}", e)))?;
+    conn.execute(Schema::CREATE_CLICK_LOGS_TABLE, [])
+        .map_err(|e| AppError::DatabaseError(format!("Failed to create click_logs table: {}", e)))?;
 
     log::info!("✅ Database migrations completed successfully");
     Ok(())
