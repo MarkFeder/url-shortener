@@ -22,6 +22,8 @@ pub enum AppError {
     ExpiredUrl(String),
     /// Internal server error
     InternalError(String),
+    /// Rate limit exceeded
+    RateLimitExceeded(String),
 }
 
 impl fmt::Display for AppError {
@@ -33,6 +35,7 @@ impl fmt::Display for AppError {
             AppError::DuplicateCode(msg) => write!(f, "Duplicate code: {}", msg),
             AppError::ExpiredUrl(msg) => write!(f, "URL expired: {}", msg),
             AppError::InternalError(msg) => write!(f, "Internal error: {}", msg),
+            AppError::RateLimitExceeded(msg) => write!(f, "Rate limit exceeded: {}", msg),
         }
     }
 }
@@ -48,6 +51,7 @@ impl ResponseError for AppError {
             AppError::DuplicateCode(_) => StatusCode::CONFLICT,
             AppError::ExpiredUrl(_) => StatusCode::GONE,
             AppError::InternalError(_) => StatusCode::INTERNAL_SERVER_ERROR,
+            AppError::RateLimitExceeded(_) => StatusCode::TOO_MANY_REQUESTS,
         }
     }
 
@@ -59,6 +63,7 @@ impl ResponseError for AppError {
             AppError::DuplicateCode(msg) => ("DUPLICATE_CODE", msg.clone()),
             AppError::ExpiredUrl(msg) => ("EXPIRED_URL", msg.clone()),
             AppError::InternalError(msg) => ("INTERNAL_ERROR", msg.clone()),
+            AppError::RateLimitExceeded(msg) => ("RATE_LIMIT_EXCEEDED", msg.clone()),
         };
 
         HttpResponse::build(self.status_code()).json(ErrorResponse::new(message, error_code))
@@ -99,11 +104,49 @@ mod tests {
             AppError::DuplicateCode("test".into()).status_code(),
             StatusCode::CONFLICT
         );
+        assert_eq!(
+            AppError::ExpiredUrl("test".into()).status_code(),
+            StatusCode::GONE
+        );
+        assert_eq!(
+            AppError::DatabaseError("test".into()).status_code(),
+            StatusCode::INTERNAL_SERVER_ERROR
+        );
+        assert_eq!(
+            AppError::InternalError("test".into()).status_code(),
+            StatusCode::INTERNAL_SERVER_ERROR
+        );
+        assert_eq!(
+            AppError::RateLimitExceeded("test".into()).status_code(),
+            StatusCode::TOO_MANY_REQUESTS
+        );
     }
 
     #[test]
     fn test_error_display() {
         let err = AppError::NotFound("URL not found".into());
         assert!(err.to_string().contains("Not found"));
+
+        let err = AppError::RateLimitExceeded("Too many requests".into());
+        assert!(err.to_string().contains("Rate limit exceeded"));
+    }
+
+    #[test]
+    fn test_all_error_variants_have_responses() {
+        // Ensure all error variants produce valid HTTP responses
+        let errors = vec![
+            AppError::NotFound("test".into()),
+            AppError::ValidationError("test".into()),
+            AppError::DatabaseError("test".into()),
+            AppError::DuplicateCode("test".into()),
+            AppError::ExpiredUrl("test".into()),
+            AppError::InternalError("test".into()),
+            AppError::RateLimitExceeded("test".into()),
+        ];
+
+        for err in errors {
+            let response = err.error_response();
+            assert!(response.status().is_client_error() || response.status().is_server_error());
+        }
     }
 }

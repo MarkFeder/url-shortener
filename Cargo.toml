@@ -2,7 +2,7 @@
 name = "url-shortener"
 version = "0.1.0"
 edition = "2021"
-authors = ["Your Name <your.email@example.com>"]
+authors = ["Marco Arjona <m.arjona@alumnos.upm.es>"]
 description = "A fast URL shortener built with Rust, Actix-web, and SQLite"
 license = "MIT"
 
@@ -10,6 +10,7 @@ license = "MIT"
 # Web framework
 actix-web = "4"
 actix-rt = "2"
+actix-governor = "0.5"    # Rate limiting middleware
 
 # Database
 rusqlite = { version = "0.31", features = ["bundled"] }

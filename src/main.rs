@@ -7,6 +7,7 @@
 //! - Redirect short URLs to original URLs
 //! - Track click statistics
 //! - RESTful API
+//! - Rate limiting for abuse protection
 
 mod config;
 mod db;
@@ -16,6 +17,7 @@ mod models;
 mod queries;
 mod services;
 
+use actix_governor::{Governor, GovernorConfigBuilder};
 use actix_web::{middleware::Logger, web, App, HttpServer};
 use log::info;
 
@@ -51,6 +53,16 @@ async fn main() -> std::io::Result<()> {
     // Capture bind address before moving config into closure
     let bind_addr = format!("{}:{}", config.host, config.port);
 
+    // Configure rate limiting: 60 requests per minute per IP
+    // This protects against DoS attacks and API abuse
+    let governor_conf = GovernorConfigBuilder::default()
+        .per_second(1) // Refill rate: 1 token per second
+        .burst_size(60) // Allow bursts up to 60 requests
+        .finish()
+        .expect("Failed to create rate limiter configuration");
+
+    info!("Rate limiting enabled: 60 requests/minute per IP");
+
     // Start HTTP server
     HttpServer::new(move || {
         App::new()
@@ -58,6 +70,8 @@ async fn main() -> std::io::Result<()> {
             .app_data(web::Data::new(pool.clone()))
             // Add base URL to app state
             .app_data(web::Data::new(config.clone()))
+            // Enable rate limiting middleware
+            .wrap(Governor::new(&governor_conf))
             // Enable logger middleware
             .wrap(Logger::default())
             // Configure routes
