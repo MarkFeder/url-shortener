@@ -30,6 +30,9 @@ impl Schema {
             referer         TEXT,
             FOREIGN KEY (url_id) REFERENCES urls (id) ON DELETE CASCADE
         )";
+
+    pub const TABLE_EXISTS: &'static str =
+        "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=?1";
 }
 
 /// URL-related queries for CRUD operations.

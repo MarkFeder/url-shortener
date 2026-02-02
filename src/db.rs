@@ -14,7 +14,10 @@ pub type DbPool = Pool<SqliteConnectionManager>;
 /// Type alias for a pooled database connection
 pub type DbConnection = PooledConnection<SqliteConnectionManager>;
 
-/// Initialize the database connection pool
+/// Initialize the database connection pool with WAL mode enabled
+///
+/// WAL (Write-Ahead Logging) mode provides better concurrent read performance
+/// and improved reliability compared to the default rollback journal mode.
 ///
 /// # Arguments
 /// * `database_url` - Path to the SQLite database file
@@ -28,7 +31,33 @@ pub fn init_pool(database_url: &str) -> Result<DbPool, AppError> {
         .build(manager)
         .map_err(|e| AppError::DatabaseError(format!("Failed to create pool: {}", e)))?;
 
+    // Enable WAL mode for better concurrent read performance
+    // Skip for in-memory databases (used in tests)
+    if !database_url.contains(":memory:") {
+        configure_wal_mode(&pool)?;
+    }
+
     Ok(pool)
+}
+
+/// Configure SQLite WAL mode and related pragmas for optimal performance
+fn configure_wal_mode(pool: &DbPool) -> Result<(), AppError> {
+    let conn = pool
+        .get()
+        .map_err(|e| AppError::DatabaseError(format!("Failed to get connection: {}", e)))?;
+
+    // Enable WAL mode for concurrent reads during writes
+    conn.execute_batch(
+        "PRAGMA journal_mode = WAL;
+         PRAGMA synchronous = NORMAL;
+         PRAGMA busy_timeout = 5000;
+         PRAGMA cache_size = -64000;
+         PRAGMA foreign_keys = ON;"
+    )
+    .map_err(|e| AppError::DatabaseError(format!("Failed to configure WAL mode: {}", e)))?;
+
+    log::info!("SQLite WAL mode enabled for better concurrency");
+    Ok(())
 }
 
 /// Run database migrations to create necessary tables
@@ -76,13 +105,44 @@ mod tests {
 
         // Verify table exists
         let count: i32 = conn
-            .query_row(
-                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='urls'",
-                [],
-                |row| row.get(0),
-            )
+            .query_row(Schema::TABLE_EXISTS, ["urls"], |row| row.get(0))
             .expect("Should query");
 
         assert_eq!(count, 1);
+    }
+
+    #[test]
+    fn test_click_logs_table_created() {
+        let pool = init_pool("file::memory:?cache=shared").expect("Should create in-memory pool");
+        run_migrations(&pool).expect("Should run migrations");
+
+        let conn = pool.get().expect("Should get connection");
+
+        // Verify click_logs table exists
+        let count: i32 = conn
+            .query_row(Schema::TABLE_EXISTS, ["click_logs"], |row| row.get(0))
+            .expect("Should query");
+
+        assert_eq!(count, 1);
+    }
+
+    #[test]
+    fn test_get_conn() {
+        let pool = init_pool("file::memory:?cache=shared").expect("Should create in-memory pool");
+        let conn = get_conn(&pool);
+        assert!(conn.is_ok());
+    }
+
+    #[test]
+    fn test_pool_max_connections() {
+        let pool = init_pool("file::memory:?cache=shared").expect("Should create in-memory pool");
+
+        // Verify we can get multiple connections up to the pool size
+        let mut connections = Vec::new();
+        for _ in 0..5 {
+            let conn = pool.get();
+            assert!(conn.is_ok());
+            connections.push(conn.unwrap());
+        }
     }
 }
