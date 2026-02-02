@@ -224,7 +224,10 @@ pub fn count_urls(pool: &DbPool) -> Result<usize, AppError> {
     Ok(count as usize)
 }
 
-/// Increment click count and optionally log the click
+/// Increment click count and log the click within a transaction
+///
+/// Uses a transaction to ensure atomicity - both the click increment
+/// and the log entry are either committed together or rolled back.
 ///
 /// # Arguments
 /// * `pool` - Database connection pool
@@ -239,13 +242,18 @@ pub fn record_click(
     user_agent: Option<&str>,
     referer: Option<&str>,
 ) -> Result<(), AppError> {
-    let conn = get_conn(pool)?;
+    let mut conn = get_conn(pool)?;
 
-    conn.execute(Urls::INCREMENT_CLICKS, params![url_id])?;
-    conn.execute(
+    // Use a transaction to ensure both operations succeed or fail together
+    let tx = conn.transaction()?;
+
+    tx.execute(Urls::INCREMENT_CLICKS, params![url_id])?;
+    tx.execute(
         ClickLogs::INSERT,
         params![url_id, ip_address, user_agent, referer],
     )?;
+
+    tx.commit()?;
 
     Ok(())
 }
@@ -315,6 +323,15 @@ mod tests {
     }
 
     #[test]
+    fn test_generate_short_code_various_lengths() {
+        for length in [4, 7, 10, 15] {
+            let code = generate_short_code(length);
+            assert_eq!(code.len(), length);
+            assert!(code.chars().all(|c| c.is_alphanumeric()));
+        }
+    }
+
+    #[test]
     fn test_create_and_get_url() {
         let pool = setup_test_db();
 
@@ -330,6 +347,21 @@ mod tests {
 
         let retrieved = get_url_by_code(&pool, "test123").unwrap();
         assert_eq!(retrieved.id, url.id);
+    }
+
+    #[test]
+    fn test_create_url_auto_generated_code() {
+        let pool = setup_test_db();
+
+        let request = CreateUrlRequest {
+            url: "https://example.com".to_string(),
+            custom_code: None,
+            expires_in_hours: None,
+        };
+
+        let url = create_url(&pool, &request, 7).unwrap();
+        assert_eq!(url.short_code.len(), 7);
+        assert!(url.short_code.chars().all(|c| c.is_alphanumeric()));
     }
 
     #[test]
@@ -368,6 +400,65 @@ mod tests {
     }
 
     #[test]
+    fn test_click_tracking_with_full_metadata() {
+        let pool = setup_test_db();
+
+        let request = CreateUrlRequest {
+            url: "https://example.com".to_string(),
+            custom_code: Some("fullmeta".to_string()),
+            expires_in_hours: None,
+        };
+
+        let url = create_url(&pool, &request, 7).unwrap();
+
+        record_click(
+            &pool,
+            url.id,
+            Some("192.168.1.1"),
+            Some("Mozilla/5.0 (Windows NT 10.0; Win64; x64)"),
+            Some("https://google.com"),
+        )
+        .unwrap();
+
+        let logs = get_click_logs(&pool, url.id, 10).unwrap();
+        assert_eq!(logs.len(), 1);
+        assert_eq!(logs[0].ip_address.as_deref(), Some("192.168.1.1"));
+        assert!(logs[0].user_agent.as_ref().unwrap().contains("Mozilla"));
+        assert_eq!(logs[0].referer.as_deref(), Some("https://google.com"));
+    }
+
+    #[test]
+    fn test_click_tracking_multiple_clicks() {
+        let pool = setup_test_db();
+
+        let request = CreateUrlRequest {
+            url: "https://example.com".to_string(),
+            custom_code: Some("multiclick".to_string()),
+            expires_in_hours: None,
+        };
+
+        let url = create_url(&pool, &request, 7).unwrap();
+
+        // Record multiple clicks
+        for i in 0..5 {
+            record_click(
+                &pool,
+                url.id,
+                Some(&format!("192.168.1.{}", i)),
+                None,
+                None,
+            )
+            .unwrap();
+        }
+
+        let updated = get_url_by_id(&pool, url.id).unwrap();
+        assert_eq!(updated.clicks, 5);
+
+        let logs = get_click_logs(&pool, url.id, 10).unwrap();
+        assert_eq!(logs.len(), 5);
+    }
+
+    #[test]
     fn test_delete_url() {
         let pool = setup_test_db();
 
@@ -382,5 +473,72 @@ mod tests {
 
         let result = get_url_by_id(&pool, url.id);
         assert!(matches!(result, Err(AppError::NotFound(_))));
+    }
+
+    #[test]
+    fn test_delete_nonexistent_url() {
+        let pool = setup_test_db();
+
+        let result = delete_url(&pool, 99999);
+        assert!(matches!(result, Err(AppError::NotFound(_))));
+    }
+
+    #[test]
+    fn test_get_nonexistent_url_by_code() {
+        let pool = setup_test_db();
+
+        let result = get_url_by_code(&pool, "nonexistent");
+        assert!(matches!(result, Err(AppError::NotFound(_))));
+    }
+
+    #[test]
+    fn test_list_urls_pagination() {
+        let pool = setup_test_db();
+
+        // Create multiple URLs
+        for i in 0..15 {
+            let request = CreateUrlRequest {
+                url: format!("https://example{}.com", i),
+                custom_code: Some(format!("page{}", i)),
+                expires_in_hours: None,
+            };
+            create_url(&pool, &request, 7).unwrap();
+        }
+
+        // Test pagination
+        let query = ListUrlsQuery {
+            page: Some(1),
+            limit: Some(5),
+            sort: Some("asc".to_string()),
+        };
+        let urls = list_urls(&pool, &query).unwrap();
+        assert_eq!(urls.len(), 5);
+
+        let query = ListUrlsQuery {
+            page: Some(2),
+            limit: Some(5),
+            sort: Some("asc".to_string()),
+        };
+        let urls = list_urls(&pool, &query).unwrap();
+        assert_eq!(urls.len(), 5);
+
+        let total = count_urls(&pool).unwrap();
+        assert_eq!(total, 15);
+    }
+
+    #[test]
+    fn test_url_expiration() {
+        let pool = setup_test_db();
+
+        // Create an already-expired URL by manipulating the database directly
+        let conn = get_conn(&pool).unwrap();
+        conn.execute(
+            "INSERT INTO urls (short_code, original_url, expires_at) VALUES (?1, ?2, ?3)",
+            rusqlite::params!["expired", "https://example.com", "2020-01-01 00:00:00"],
+        )
+        .unwrap();
+
+        let result = get_url_by_code(&pool, "expired");
+        assert!(matches!(result, Err(AppError::ExpiredUrl(_))));
     }
 }
