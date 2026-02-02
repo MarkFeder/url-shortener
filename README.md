@@ -9,8 +9,11 @@ A fast, lightweight URL shortener built with **Rust**, **Actix-web**, and **SQLi
 - ⏰ **Expiring URLs** - set expiration time in hours
 - 📊 **Click tracking** - track how many times each URL is accessed
 - 📈 **Analytics** - view click logs with IP, user agent, and referer
+- 🛡️ **Rate limiting** - 60 requests/minute per IP to prevent abuse
 - 🚀 **Blazing fast** - built with Rust and Actix-web
 - 💾 **SQLite storage** - no database server required
+- ⚡ **WAL mode** - SQLite Write-Ahead Logging for better concurrency
+- 🔒 **Atomic operations** - transaction-based click recording for data consistency
 
 ## Learning Concepts
 
@@ -21,8 +24,11 @@ This project demonstrates:
 3. **Persistence** - SQLite database with connection pooling (r2d2)
 4. **Error Handling** - Custom error types with proper HTTP responses
 5. **Validation** - Input validation with the validator crate
-6. **Middleware** - Logging middleware for request tracking
-7. **Testing** - Unit and integration tests
+6. **Middleware** - Logging and rate limiting middleware
+7. **Rate Limiting** - Request throttling with actix-governor
+8. **Database Optimization** - WAL mode for concurrent read/write performance
+9. **Transactions** - Atomic operations for data consistency
+10. **Testing** - Unit and integration tests
 
 ## Project Structure
 
@@ -34,12 +40,13 @@ url-shortener/
 ├── .gitignore              # Git ignore rules
 ├── README.md               # This file
 └── src/
-    ├── main.rs             # Application entry point
+    ├── main.rs             # Application entry point and server setup
     ├── config.rs           # Configuration management
-    ├── db.rs               # Database setup and migrations
+    ├── db.rs               # Database pool, WAL configuration, and migrations
     ├── models.rs           # Data structures and DTOs
-    ├── errors.rs           # Custom error types
-    ├── services.rs         # Business logic
+    ├── errors.rs           # Custom error types and HTTP response mapping
+    ├── queries.rs          # SQL query constants
+    ├── services.rs         # Business logic layer
     └── handlers.rs         # HTTP route handlers
 ```
 
@@ -174,6 +181,68 @@ DELETE /api/urls/{id}
 GET /health
 ```
 
+**Response (200 OK):**
+```json
+{
+    "status": "healthy",
+    "version": "0.1.0"
+}
+```
+
+## Error Responses
+
+The API returns consistent error responses with appropriate HTTP status codes:
+
+| Status Code | Error Code | Description |
+|-------------|------------|-------------|
+| 400 | `VALIDATION_ERROR` | Invalid input (bad URL format, invalid custom code) |
+| 404 | `NOT_FOUND` | URL or resource not found |
+| 409 | `DUPLICATE_CODE` | Custom short code already exists |
+| 410 | `EXPIRED_URL` | URL has expired |
+| 429 | `RATE_LIMIT_EXCEEDED` | Too many requests |
+| 500 | `INTERNAL_ERROR` | Server error |
+
+**Example error response:**
+```json
+{
+    "error": "URL with code 'abc123' not found",
+    "code": "NOT_FOUND"
+}
+```
+
+## Rate Limiting
+
+The API is protected by rate limiting to prevent abuse:
+
+- **Limit:** 60 requests per minute per IP address
+- **Burst:** Up to 60 requests allowed in a burst
+- **Response:** Returns `429 Too Many Requests` when limit is exceeded
+
+## Database Schema
+
+The application uses SQLite with two tables:
+
+**urls** - Stores shortened URLs
+| Column | Type | Description |
+|--------|------|-------------|
+| `id` | INTEGER | Primary key |
+| `short_code` | TEXT | Unique short code (indexed) |
+| `original_url` | TEXT | Original URL |
+| `clicks` | INTEGER | Click counter |
+| `created_at` | TEXT | Creation timestamp |
+| `updated_at` | TEXT | Last update timestamp |
+| `expires_at` | TEXT | Optional expiration timestamp |
+
+**click_logs** - Stores click analytics
+| Column | Type | Description |
+|--------|------|-------------|
+| `id` | INTEGER | Primary key |
+| `url_id` | INTEGER | Foreign key to urls |
+| `clicked_at` | TEXT | Click timestamp |
+| `ip_address` | TEXT | Visitor IP address |
+| `user_agent` | TEXT | Browser user agent |
+| `referer` | TEXT | Referring URL |
+
 ## Configuration
 
 Environment variables (set in `.env` file):
@@ -225,28 +294,35 @@ curl -L http://localhost:8080/docs
 
 Here are some ideas for extending this project:
 
-1. **Rate Limiting** - Prevent abuse with request rate limiting
-2. **Authentication** - Add API keys or JWT authentication
-3. **QR Codes** - Generate QR codes for short URLs
-4. **Custom Domains** - Support multiple base URLs
-5. **Bulk Operations** - Create/delete multiple URLs at once
-6. **Search** - Search URLs by original URL or code
-7. **Tags/Categories** - Organize URLs with tags
-8. **Web UI** - Add a frontend with HTML templates or SPA
+1. **Authentication** - Add API keys or JWT authentication
+2. **QR Codes** - Generate QR codes for short URLs
+3. **Custom Domains** - Support multiple base URLs
+4. **Bulk Operations** - Create/delete multiple URLs at once
+5. **Search** - Search URLs by original URL or code
+6. **Tags/Categories** - Organize URLs with tags
+7. **Web UI** - Add a frontend with HTML templates or SPA
+8. **Caching** - Add Redis or in-memory caching for hot URLs
+9. **Metrics** - Add Prometheus metrics for monitoring
+10. **Docker Support** - Add Dockerfile and docker-compose for deployment
 
 ## Dependencies
 
 | Crate | Purpose |
 |-------|---------|
 | `actix-web` | Web framework |
+| `actix-governor` | Rate limiting middleware |
 | `rusqlite` | SQLite database |
 | `r2d2` | Connection pooling |
 | `serde` | Serialization |
+| `serde_json` | JSON support |
 | `nanoid` | Short code generation |
 | `chrono` | Date/time handling |
 | `validator` | Input validation |
 | `thiserror` | Error handling |
 | `env_logger` | Logging |
+| `url` | URL parsing and validation |
+| `regex` | Regular expressions |
+| `lazy_static` | Lazy static initialization |
 
 ## License
 
