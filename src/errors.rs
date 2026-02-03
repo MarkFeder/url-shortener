@@ -22,8 +22,8 @@ pub enum AppError {
     ExpiredUrl(String),
     /// Internal server error
     InternalError(String),
-    /// Rate limit exceeded
-    RateLimitExceeded(String),
+    /// Unauthorized access
+    Unauthorized(String),
 }
 
 impl fmt::Display for AppError {
@@ -35,7 +35,7 @@ impl fmt::Display for AppError {
             AppError::DuplicateCode(msg) => write!(f, "Duplicate code: {}", msg),
             AppError::ExpiredUrl(msg) => write!(f, "URL expired: {}", msg),
             AppError::InternalError(msg) => write!(f, "Internal error: {}", msg),
-            AppError::RateLimitExceeded(msg) => write!(f, "Rate limit exceeded: {}", msg),
+            AppError::Unauthorized(msg) => write!(f, "Unauthorized: {}", msg),
         }
     }
 }
@@ -51,7 +51,7 @@ impl ResponseError for AppError {
             AppError::DuplicateCode(_) => StatusCode::CONFLICT,
             AppError::ExpiredUrl(_) => StatusCode::GONE,
             AppError::InternalError(_) => StatusCode::INTERNAL_SERVER_ERROR,
-            AppError::RateLimitExceeded(_) => StatusCode::TOO_MANY_REQUESTS,
+            AppError::Unauthorized(_) => StatusCode::UNAUTHORIZED,
         }
     }
 
@@ -63,7 +63,7 @@ impl ResponseError for AppError {
             AppError::DuplicateCode(msg) => ("DUPLICATE_CODE", msg.clone()),
             AppError::ExpiredUrl(msg) => ("EXPIRED_URL", msg.clone()),
             AppError::InternalError(msg) => ("INTERNAL_ERROR", msg.clone()),
-            AppError::RateLimitExceeded(msg) => ("RATE_LIMIT_EXCEEDED", msg.clone()),
+            AppError::Unauthorized(msg) => ("UNAUTHORIZED", msg.clone()),
         };
 
         HttpResponse::build(self.status_code()).json(ErrorResponse::new(message, error_code))
@@ -116,19 +116,12 @@ mod tests {
             AppError::InternalError("test".into()).status_code(),
             StatusCode::INTERNAL_SERVER_ERROR
         );
-        assert_eq!(
-            AppError::RateLimitExceeded("test".into()).status_code(),
-            StatusCode::TOO_MANY_REQUESTS
-        );
     }
 
     #[test]
     fn test_error_display() {
         let err = AppError::NotFound("URL not found".into());
         assert!(err.to_string().contains("Not found"));
-
-        let err = AppError::RateLimitExceeded("Too many requests".into());
-        assert!(err.to_string().contains("Rate limit exceeded"));
     }
 
     #[test]
@@ -141,7 +134,7 @@ mod tests {
             AppError::DuplicateCode("test".into()),
             AppError::ExpiredUrl("test".into()),
             AppError::InternalError("test".into()),
-            AppError::RateLimitExceeded("test".into()),
+            AppError::Unauthorized("test".into()),
         ];
 
         for err in errors {
