@@ -1,0 +1,34 @@
+# Build artifacts
+target/
+
+# Git
+.git/
+.gitignore
+
+# Environment files
+.env
+.env.*
+
+# Database files
+*.db
+*.db-journal
+*.db-shm
+*.db-wal
+
+# IDE/Editor
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Documentation
+*.md
+!README.md
+
+# Misc
+.DS_Store
+Thumbs.db
+
+# Claude
+.claude/
