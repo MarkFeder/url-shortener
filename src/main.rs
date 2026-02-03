@@ -8,6 +8,7 @@
 //! - Track click statistics
 //! - RESTful API
 //! - Rate limiting for abuse protection
+//! - Per-user API key authentication
 
 mod auth;
 mod config;
@@ -34,22 +35,26 @@ async fn main() -> std::io::Result<()> {
     let config = config::Config::from_env();
 
     // Initialize database connection pool
-    let pool = db::init_pool(&config.database_url)
-        .expect("Failed to create database pool");
+    let pool =
+        db::init_pool(&config.database_url).expect("Failed to create database pool");
 
     // Run database migrations
     db::run_migrations(&pool).expect("Failed to run database migrations");
 
     info!(
-        "🚀 Starting URL Shortener server at http://{}:{}",
+        "Starting URL Shortener server at http://{}:{}",
         config.host, config.port
     );
-    info!("📝 API Documentation:");
-    info!("   POST /api/shorten     - Create a short URL");
-    info!("   GET  /api/urls        - List all URLs");
-    info!("   GET  /api/urls/{{id}}   - Get URL details");
-    info!("   DELETE /api/urls/{{id}} - Delete a URL");
-    info!("   GET  /{{short_code}}    - Redirect to original URL");
+    info!("API Documentation:");
+    info!("   POST /api/auth/register     - Register with email, get API key");
+    info!("   POST /api/auth/keys         - Create new API key");
+    info!("   GET  /api/auth/keys         - List your API keys");
+    info!("   DELETE /api/auth/keys/{{id}}  - Revoke an API key");
+    info!("   POST /api/shorten           - Create a short URL");
+    info!("   GET  /api/urls              - List your URLs");
+    info!("   GET  /api/urls/{{id}}         - Get URL details");
+    info!("   DELETE /api/urls/{{id}}       - Delete a URL");
+    info!("   GET  /{{short_code}}          - Redirect to original URL");
 
     // Capture bind address before moving config into closure
     let bind_addr = format!("{}:{}", config.host, config.port);
@@ -63,12 +68,7 @@ async fn main() -> std::io::Result<()> {
         .expect("Failed to create rate limiter configuration");
 
     info!("Rate limiting enabled: 60 requests/minute per IP");
-
-    if config.api_key.is_some() {
-        info!("🔐 API key authentication enabled for /api/* endpoints");
-    } else {
-        info!("⚠️  API key authentication disabled (set API_KEY env var to enable)");
-    }
+    info!("Per-user API key authentication enabled");
 
     // Start HTTP server
     HttpServer::new(move || {

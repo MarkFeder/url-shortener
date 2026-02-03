@@ -32,6 +32,8 @@ validator = { version = "0.18", features = ["derive"] }  # Input validation
 url = "2"                # URL validation
 lazy_static = "1"        # Lazy static initialization
 regex = "1"              # Regular expressions
+sha2 = "0.10"            # SHA-256 hashing for API keys
+rand = "0.8"             # Random generation for API keys
 
 [dev-dependencies]
 actix-rt = "2"

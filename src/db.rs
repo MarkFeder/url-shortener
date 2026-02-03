@@ -52,7 +52,7 @@ fn configure_wal_mode(pool: &DbPool) -> Result<(), AppError> {
          PRAGMA synchronous = NORMAL;
          PRAGMA busy_timeout = 5000;
          PRAGMA cache_size = -64000;
-         PRAGMA foreign_keys = ON;"
+         PRAGMA foreign_keys = ON;",
     )
     .map_err(|e| AppError::DatabaseError(format!("Failed to configure WAL mode: {}", e)))?;
 
@@ -72,6 +72,15 @@ pub fn run_migrations(pool: &DbPool) -> Result<(), AppError> {
         .get()
         .map_err(|e| AppError::DatabaseError(format!("Failed to get connection: {}", e)))?;
 
+    // Create users table first (foreign key dependency)
+    conn.execute(Schema::CREATE_USERS_TABLE, [])
+        .map_err(|e| AppError::DatabaseError(format!("Failed to create users table: {}", e)))?;
+
+    // Create api_keys table
+    conn.execute(Schema::CREATE_API_KEYS_TABLE, [])
+        .map_err(|e| AppError::DatabaseError(format!("Failed to create api_keys table: {}", e)))?;
+
+    // Create urls table (now with user_id foreign key)
     conn.execute(Schema::CREATE_URLS_TABLE, [])
         .map_err(|e| AppError::DatabaseError(format!("Failed to create urls table: {}", e)))?;
 
@@ -81,7 +90,36 @@ pub fn run_migrations(pool: &DbPool) -> Result<(), AppError> {
     conn.execute(Schema::CREATE_CLICK_LOGS_TABLE, [])
         .map_err(|e| AppError::DatabaseError(format!("Failed to create click_logs table: {}", e)))?;
 
-    log::info!("✅ Database migrations completed successfully");
+    // Migration: Add user_id column to existing urls table if it doesn't exist
+    // This handles upgrading from the old schema
+    let has_user_id: i32 = conn
+        .query_row(Schema::COLUMN_EXISTS, ["urls", "user_id"], |row| row.get(0))
+        .unwrap_or(0);
+
+    if has_user_id == 0 {
+        // Only run if the table exists but lacks user_id column
+        let table_exists: i32 = conn
+            .query_row(Schema::TABLE_EXISTS, ["urls"], |row| row.get(0))
+            .unwrap_or(0);
+
+        if table_exists > 0 {
+            // Add the user_id column to existing table
+            match conn.execute(Schema::ADD_USER_ID_TO_URLS, []) {
+                Ok(_) => log::info!("Added user_id column to existing urls table"),
+                Err(e) => {
+                    // Ignore if column already exists (race condition or retry)
+                    if !e.to_string().contains("duplicate column") {
+                        return Err(AppError::DatabaseError(format!(
+                            "Failed to add user_id column: {}",
+                            e
+                        )));
+                    }
+                }
+            }
+        }
+    }
+
+    log::info!("Database migrations completed successfully");
     Ok(())
 }
 
@@ -103,9 +141,39 @@ mod tests {
 
         let conn = pool.get().expect("Should get connection");
 
-        // Verify table exists
+        // Verify urls table exists
         let count: i32 = conn
             .query_row(Schema::TABLE_EXISTS, ["urls"], |row| row.get(0))
+            .expect("Should query");
+
+        assert_eq!(count, 1);
+    }
+
+    #[test]
+    fn test_users_table_created() {
+        let pool = init_pool("file::memory:?cache=shared").expect("Should create in-memory pool");
+        run_migrations(&pool).expect("Should run migrations");
+
+        let conn = pool.get().expect("Should get connection");
+
+        // Verify users table exists
+        let count: i32 = conn
+            .query_row(Schema::TABLE_EXISTS, ["users"], |row| row.get(0))
+            .expect("Should query");
+
+        assert_eq!(count, 1);
+    }
+
+    #[test]
+    fn test_api_keys_table_created() {
+        let pool = init_pool("file::memory:?cache=shared").expect("Should create in-memory pool");
+        run_migrations(&pool).expect("Should run migrations");
+
+        let conn = pool.get().expect("Should get connection");
+
+        // Verify api_keys table exists
+        let count: i32 = conn
+            .query_row(Schema::TABLE_EXISTS, ["api_keys"], |row| row.get(0))
             .expect("Should query");
 
         assert_eq!(count, 1);

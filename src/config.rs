@@ -17,8 +17,6 @@ pub struct Config {
     pub base_url: String,
     /// Length of generated short codes
     pub short_code_length: usize,
-    /// API key for authentication (optional - if not set, auth is disabled)
-    pub api_key: Option<String>,
 }
 
 impl Config {
@@ -37,12 +35,11 @@ impl Config {
             .parse()
             .expect("PORT must be a valid number");
 
-        let base_url = env::var("BASE_URL")
-            .unwrap_or_else(|_| format!("http://{}:{}", host, port));
+        let base_url =
+            env::var("BASE_URL").unwrap_or_else(|_| format!("http://{}:{}", host, port));
 
         Self {
-            database_url: env::var("DATABASE_URL")
-                .unwrap_or_else(|_| "urls.db".to_string()),
+            database_url: env::var("DATABASE_URL").unwrap_or_else(|_| "urls.db".to_string()),
             host,
             port,
             base_url,
@@ -50,7 +47,6 @@ impl Config {
                 .unwrap_or_else(|_| "7".to_string())
                 .parse()
                 .expect("SHORT_CODE_LENGTH must be a valid number"),
-            api_key: env::var("API_KEY").ok(),
         }
     }
 }
@@ -63,7 +59,6 @@ impl Default for Config {
             port: 8080,
             base_url: "http://localhost:8080".to_string(),
             short_code_length: 7,
-            api_key: None,
         }
     }
 }

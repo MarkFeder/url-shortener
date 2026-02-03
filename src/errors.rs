@@ -24,6 +24,10 @@ pub enum AppError {
     InternalError(String),
     /// Unauthorized access
     Unauthorized(String),
+    /// Forbidden - authenticated but not allowed
+    Forbidden(String),
+    /// Email already registered
+    EmailAlreadyExists(String),
 }
 
 impl fmt::Display for AppError {
@@ -36,6 +40,8 @@ impl fmt::Display for AppError {
             AppError::ExpiredUrl(msg) => write!(f, "URL expired: {}", msg),
             AppError::InternalError(msg) => write!(f, "Internal error: {}", msg),
             AppError::Unauthorized(msg) => write!(f, "Unauthorized: {}", msg),
+            AppError::Forbidden(msg) => write!(f, "Forbidden: {}", msg),
+            AppError::EmailAlreadyExists(msg) => write!(f, "Email already exists: {}", msg),
         }
     }
 }
@@ -52,6 +58,8 @@ impl ResponseError for AppError {
             AppError::ExpiredUrl(_) => StatusCode::GONE,
             AppError::InternalError(_) => StatusCode::INTERNAL_SERVER_ERROR,
             AppError::Unauthorized(_) => StatusCode::UNAUTHORIZED,
+            AppError::Forbidden(_) => StatusCode::FORBIDDEN,
+            AppError::EmailAlreadyExists(_) => StatusCode::CONFLICT,
         }
     }
 
@@ -64,6 +72,8 @@ impl ResponseError for AppError {
             AppError::ExpiredUrl(msg) => ("EXPIRED_URL", msg.clone()),
             AppError::InternalError(msg) => ("INTERNAL_ERROR", msg.clone()),
             AppError::Unauthorized(msg) => ("UNAUTHORIZED", msg.clone()),
+            AppError::Forbidden(msg) => ("FORBIDDEN", msg.clone()),
+            AppError::EmailAlreadyExists(msg) => ("EMAIL_ALREADY_EXISTS", msg.clone()),
         };
 
         HttpResponse::build(self.status_code()).json(ErrorResponse::new(message, error_code))
@@ -116,6 +126,14 @@ mod tests {
             AppError::InternalError("test".into()).status_code(),
             StatusCode::INTERNAL_SERVER_ERROR
         );
+        assert_eq!(
+            AppError::Forbidden("test".into()).status_code(),
+            StatusCode::FORBIDDEN
+        );
+        assert_eq!(
+            AppError::EmailAlreadyExists("test".into()).status_code(),
+            StatusCode::CONFLICT
+        );
     }
 
     #[test]
@@ -135,6 +153,8 @@ mod tests {
             AppError::ExpiredUrl("test".into()),
             AppError::InternalError("test".into()),
             AppError::Unauthorized("test".into()),
+            AppError::Forbidden("test".into()),
+            AppError::EmailAlreadyExists("test".into()),
         ];
 
         for err in errors {
