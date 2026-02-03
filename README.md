@@ -9,6 +9,9 @@ A fast, lightweight URL shortener built with **Rust**, **Actix-web**, and **SQLi
 - ⏰ **Expiring URLs** - set expiration time in hours
 - 📊 **Click tracking** - track how many times each URL is accessed
 - 📈 **Analytics** - view click logs with IP, user agent, and referer
+- 🔐 **Per-user authentication** - email registration with API key management
+- 🔑 **Multiple API keys** - create, list, and revoke API keys per user
+- 👤 **URL ownership** - users can only access their own URLs
 - 🛡️ **Rate limiting** - 60 requests/minute per IP to prevent abuse
 - 🚀 **Blazing fast** - built with Rust and Actix-web
 - 💾 **SQLite storage** - no database server required
@@ -28,7 +31,9 @@ This project demonstrates:
 7. **Rate Limiting** - Request throttling with actix-governor
 8. **Database Optimization** - WAL mode for concurrent read/write performance
 9. **Transactions** - Atomic operations for data consistency
-10. **Testing** - Unit and integration tests
+10. **Authentication** - Per-user API key authentication with SHA-256 hashing
+11. **Authorization** - Resource ownership and access control
+12. **Testing** - Unit and integration tests
 
 ## Project Structure
 
@@ -47,7 +52,8 @@ url-shortener/
     ├── errors.rs           # Custom error types and HTTP response mapping
     ├── queries.rs          # SQL query constants
     ├── services.rs         # Business logic layer
-    └── handlers.rs         # HTTP route handlers
+    ├── handlers.rs         # HTTP route handlers
+    └── auth.rs             # API key authentication extractor
 ```
 
 ## Prerequisites
@@ -83,10 +89,109 @@ cargo test
 
 ## API Reference
 
-### Create Short URL
+### Authentication
+
+All `/api/*` endpoints (except `/api/auth/register`) require authentication via API key.
+
+**Provide the API key using one of these headers:**
+- `X-API-Key: usk_your_key_here`
+- `Authorization: Bearer usk_your_key_here`
+
+---
+
+### Register User (Public)
+
+```bash
+POST /api/auth/register
+Content-Type: application/json
+
+{
+    "email": "user@example.com"
+}
+```
+
+**Response (201 Created):**
+```json
+{
+    "user_id": 1,
+    "email": "user@example.com",
+    "api_key": "usk_a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6"
+}
+```
+
+> ⚠️ **Save your API key!** It is only shown once at registration.
+
+---
+
+### Create API Key (Authenticated)
+
+```bash
+POST /api/auth/keys
+X-API-Key: usk_your_key_here
+Content-Type: application/json
+
+{
+    "name": "CI/CD key"
+}
+```
+
+**Response (201 Created):**
+```json
+{
+    "id": 2,
+    "name": "CI/CD key",
+    "api_key": "usk_x9y8z7w6v5u4t3s2r1q0p9o8n7m6l5k4",
+    "created_at": "2024-01-01 12:00:00"
+}
+```
+
+---
+
+### List API Keys (Authenticated)
+
+```bash
+GET /api/auth/keys
+X-API-Key: usk_your_key_here
+```
+
+**Response (200 OK):**
+```json
+{
+    "keys": [
+        {
+            "id": 1,
+            "name": "Default key",
+            "created_at": "2024-01-01 12:00:00",
+            "last_used_at": "2024-01-15 08:30:00",
+            "is_active": true
+        }
+    ]
+}
+```
+
+---
+
+### Revoke API Key (Authenticated)
+
+```bash
+DELETE /api/auth/keys/{id}
+X-API-Key: usk_your_key_here
+```
+
+**Response (200 OK):**
+```json
+{
+    "message": "API key revoked successfully"
+}
+```
+
+---
+
+### Create Short URL (Authenticated)
 
 ```bash
 POST /api/shorten
+X-API-Key: usk_your_key_here
 Content-Type: application/json
 
 {
@@ -107,7 +212,9 @@ Content-Type: application/json
 }
 ```
 
-### Redirect to Original URL
+---
+
+### Redirect to Original URL (Public)
 
 ```bash
 GET /{short_code}
@@ -115,10 +222,13 @@ GET /{short_code}
 
 **Response:** 301 Permanent Redirect to the original URL
 
-### List All URLs
+---
+
+### List Your URLs (Authenticated)
 
 ```bash
 GET /api/urls?page=1&limit=20&sort=desc
+X-API-Key: usk_your_key_here
 ```
 
 **Response (200 OK):**
@@ -140,16 +250,24 @@ GET /api/urls?page=1&limit=20&sort=desc
 }
 ```
 
-### Get URL Details
+> Note: Only returns URLs owned by the authenticated user.
+
+---
+
+### Get URL Details (Authenticated)
 
 ```bash
 GET /api/urls/{id}
+X-API-Key: usk_your_key_here
 ```
 
-### Get URL Statistics
+---
+
+### Get URL Statistics (Authenticated)
 
 ```bash
 GET /api/urls/{id}/stats
+X-API-Key: usk_your_key_here
 ```
 
 **Response (200 OK):**
@@ -169,13 +287,18 @@ GET /api/urls/{id}/stats
 }
 ```
 
-### Delete URL
+---
+
+### Delete URL (Authenticated)
 
 ```bash
 DELETE /api/urls/{id}
+X-API-Key: usk_your_key_here
 ```
 
-### Health Check
+---
+
+### Health Check (Public)
 
 ```bash
 GET /health
@@ -196,8 +319,11 @@ The API returns consistent error responses with appropriate HTTP status codes:
 | Status Code | Error Code | Description |
 |-------------|------------|-------------|
 | 400 | `VALIDATION_ERROR` | Invalid input (bad URL format, invalid custom code) |
+| 401 | `UNAUTHORIZED` | Missing or invalid API key |
+| 403 | `FORBIDDEN` | Not allowed to access this resource |
 | 404 | `NOT_FOUND` | URL or resource not found |
 | 409 | `DUPLICATE_CODE` | Custom short code already exists |
+| 409 | `EMAIL_ALREADY_EXISTS` | Email is already registered |
 | 410 | `EXPIRED_URL` | URL has expired |
 | 429 | `RATE_LIMIT_EXCEEDED` | Too many requests |
 | 500 | `INTERNAL_ERROR` | Server error |
@@ -205,8 +331,8 @@ The API returns consistent error responses with appropriate HTTP status codes:
 **Example error response:**
 ```json
 {
-    "error": "URL with code 'abc123' not found",
-    "code": "NOT_FOUND"
+    "error": "Missing API key. Provide via 'Authorization: Bearer <key>' or 'X-API-Key: <key>' header",
+    "code": "UNAUTHORIZED"
 }
 ```
 
@@ -220,7 +346,25 @@ The API is protected by rate limiting to prevent abuse:
 
 ## Database Schema
 
-The application uses SQLite with two tables:
+The application uses SQLite with four tables:
+
+**users** - Stores registered users
+| Column | Type | Description |
+|--------|------|-------------|
+| `id` | INTEGER | Primary key |
+| `email` | TEXT | Unique email address |
+| `created_at` | TEXT | Registration timestamp |
+
+**api_keys** - Stores API keys for authentication
+| Column | Type | Description |
+|--------|------|-------------|
+| `id` | INTEGER | Primary key |
+| `user_id` | INTEGER | Foreign key to users |
+| `key_hash` | TEXT | SHA-256 hash of API key |
+| `name` | TEXT | Human-readable key name |
+| `created_at` | TEXT | Creation timestamp |
+| `last_used_at` | TEXT | Last usage timestamp |
+| `is_active` | INTEGER | Whether key is active (1) or revoked (0) |
 
 **urls** - Stores shortened URLs
 | Column | Type | Description |
@@ -232,6 +376,7 @@ The application uses SQLite with two tables:
 | `created_at` | TEXT | Creation timestamp |
 | `updated_at` | TEXT | Last update timestamp |
 | `expires_at` | TEXT | Optional expiration timestamp |
+| `user_id` | INTEGER | Foreign key to users (owner) |
 
 **click_logs** - Stores click analytics
 | Column | Type | Description |
@@ -259,42 +404,68 @@ Environment variables (set in `.env` file):
 ## Testing with cURL
 
 ```bash
-# Create a short URL
+# Register a new user (save the api_key from response!)
+curl -X POST http://localhost:8080/api/auth/register \
+  -H "Content-Type: application/json" \
+  -d '{"email": "user@example.com"}'
+
+# Create a short URL (replace YOUR_API_KEY)
 curl -X POST http://localhost:8080/api/shorten \
   -H "Content-Type: application/json" \
+  -H "X-API-Key: YOUR_API_KEY" \
   -d '{"url": "https://www.rust-lang.org/learn"}'
 
 # Create with custom code
 curl -X POST http://localhost:8080/api/shorten \
   -H "Content-Type: application/json" \
+  -H "X-API-Key: YOUR_API_KEY" \
   -d '{"url": "https://docs.rs", "custom_code": "docs"}'
 
 # Create with expiration
 curl -X POST http://localhost:8080/api/shorten \
   -H "Content-Type: application/json" \
+  -H "X-API-Key: YOUR_API_KEY" \
   -d '{"url": "https://temp.example.com", "expires_in_hours": 1}'
 
-# List all URLs
-curl http://localhost:8080/api/urls
+# List your URLs
+curl -H "X-API-Key: YOUR_API_KEY" \
+  http://localhost:8080/api/urls
 
 # Get URL details
-curl http://localhost:8080/api/urls/1
+curl -H "X-API-Key: YOUR_API_KEY" \
+  http://localhost:8080/api/urls/1
 
 # Get URL statistics
-curl http://localhost:8080/api/urls/1/stats
+curl -H "X-API-Key: YOUR_API_KEY" \
+  http://localhost:8080/api/urls/1/stats
 
 # Delete a URL
-curl -X DELETE http://localhost:8080/api/urls/1
+curl -X DELETE -H "X-API-Key: YOUR_API_KEY" \
+  http://localhost:8080/api/urls/1
 
-# Test redirect (follow redirects)
+# Test redirect (follow redirects) - no auth needed
 curl -L http://localhost:8080/docs
+
+# Create another API key
+curl -X POST http://localhost:8080/api/auth/keys \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: YOUR_API_KEY" \
+  -d '{"name": "Backup key"}'
+
+# List your API keys
+curl -H "X-API-Key: YOUR_API_KEY" \
+  http://localhost:8080/api/auth/keys
+
+# Revoke an API key
+curl -X DELETE -H "X-API-Key: YOUR_API_KEY" \
+  http://localhost:8080/api/auth/keys/2
 ```
 
 ## Adding New Features
 
 Here are some ideas for extending this project:
 
-1. **Authentication** - Add API keys or JWT authentication
+1. ~~**Authentication** - Add API keys or JWT authentication~~ ✅ Done!
 2. **QR Codes** - Generate QR codes for short URLs
 3. **Custom Domains** - Support multiple base URLs
 4. **Bulk Operations** - Create/delete multiple URLs at once
@@ -323,6 +494,8 @@ Here are some ideas for extending this project:
 | `url` | URL parsing and validation |
 | `regex` | Regular expressions |
 | `lazy_static` | Lazy static initialization |
+| `sha2` | SHA-256 hashing for API keys |
+| `rand` | Random generation for API keys |
 
 ## License
 
