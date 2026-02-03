@@ -5,6 +5,7 @@
 use actix_web::{delete, get, post, web, HttpRequest, HttpResponse};
 use validator::Validate;
 
+use crate::auth::ApiKey;
 use crate::config::Config;
 use crate::db::DbPool;
 use crate::errors::AppError;
@@ -56,6 +57,7 @@ pub fn configure_routes(cfg: &mut web::ServiceConfig) {
 /// ```
 #[post("/shorten")]
 async fn create_short_url(
+    _key: ApiKey,
     pool: web::Data<DbPool>,
     config: web::Data<Config>,
     body: web::Json<CreateUrlRequest>,
@@ -98,6 +100,7 @@ async fn create_short_url(
 /// ```
 #[get("/urls")]
 async fn list_urls(
+    _key: ApiKey,
     pool: web::Data<DbPool>,
     config: web::Data<Config>,
     query: web::Query<ListUrlsQuery>,
@@ -127,6 +130,7 @@ async fn list_urls(
 /// Returns the full URL details including click statistics
 #[get("/urls/{id}")]
 async fn get_url_by_id(
+    _key: ApiKey,
     pool: web::Data<DbPool>,
     config: web::Data<Config>,
     path: web::Path<i64>,
@@ -147,6 +151,7 @@ async fn get_url_by_id(
 /// Returns click statistics and recent click logs
 #[get("/urls/{id}/stats")]
 async fn get_url_stats(
+    _key: ApiKey,
     pool: web::Data<DbPool>,
     config: web::Data<Config>,
     path: web::Path<i64>,
@@ -176,6 +181,7 @@ async fn get_url_stats(
 /// ```
 #[delete("/urls/{id}")]
 async fn delete_url_by_id(
+    _key: ApiKey,
     pool: web::Data<DbPool>,
     path: web::Path<i64>,
 ) -> Result<HttpResponse, AppError> {

@@ -9,6 +9,7 @@
 //! - RESTful API
 //! - Rate limiting for abuse protection
 
+mod auth;
 mod config;
 mod db;
 mod errors;
@@ -62,6 +63,12 @@ async fn main() -> std::io::Result<()> {
         .expect("Failed to create rate limiter configuration");
 
     info!("Rate limiting enabled: 60 requests/minute per IP");
+
+    if config.api_key.is_some() {
+        info!("🔐 API key authentication enabled for /api/* endpoints");
+    } else {
+        info!("⚠️  API key authentication disabled (set API_KEY env var to enable)");
+    }
 
     // Start HTTP server
     HttpServer::new(move || {
