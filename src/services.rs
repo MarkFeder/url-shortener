@@ -66,11 +66,7 @@ pub fn register_user(pool: &DbPool, email: &str) -> Result<(User, String), AppEr
 
     // Check if email already exists
     let exists: i32 = conn
-        .query_row(
-            "SELECT COUNT(*) FROM users WHERE email = ?1",
-            params![email],
-            |row| row.get(0),
-        )
+        .query_row(Users::COUNT_BY_EMAIL, params![email], |row| row.get(0))
         .unwrap_or(0);
 
     if exists > 0 {
@@ -142,21 +138,17 @@ pub fn create_api_key(pool: &DbPool, user_id: i64, name: &str) -> Result<(ApiKey
     conn.execute(ApiKeys::INSERT, params![user_id, key_hash, name])?;
     let key_id = conn.last_insert_rowid();
 
-    let record = conn.query_row(
-        "SELECT id, user_id, key_hash, name, created_at, last_used_at, is_active FROM api_keys WHERE id = ?1",
-        params![key_id],
-        |row| {
-            Ok(ApiKeyRecord {
-                id: row.get(0)?,
-                user_id: row.get(1)?,
-                key_hash: row.get(2)?,
-                name: row.get(3)?,
-                created_at: row.get(4)?,
-                last_used_at: row.get(5)?,
-                is_active: row.get::<_, i32>(6)? == 1,
-            })
-        },
-    )?;
+    let record = conn.query_row(ApiKeys::SELECT_BY_ID, params![key_id], |row| {
+        Ok(ApiKeyRecord {
+            id: row.get(0)?,
+            user_id: row.get(1)?,
+            key_hash: row.get(2)?,
+            name: row.get(3)?,
+            created_at: row.get(4)?,
+            last_used_at: row.get(5)?,
+            is_active: row.get::<_, i32>(6)? == 1,
+        })
+    })?;
 
     log::info!("Created API key '{}' for user {}", name, user_id);
 
@@ -216,7 +208,7 @@ pub fn revoke_api_key(pool: &DbPool, user_id: i64, key_id: i64) -> Result<(), Ap
     // First check if the key exists and belongs to the user
     let exists: i32 = conn
         .query_row(
-            "SELECT COUNT(*) FROM api_keys WHERE id = ?1 AND user_id = ?2",
+            ApiKeys::COUNT_BY_ID_AND_USER,
             params![key_id, user_id],
             |row| row.get(0),
         )

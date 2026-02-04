@@ -74,6 +74,9 @@ impl Users {
 
     pub const SELECT_BY_ID: &'static str =
         "SELECT id, email, created_at FROM users WHERE id = ?1";
+
+    pub const COUNT_BY_EMAIL: &'static str =
+        "SELECT COUNT(*) FROM users WHERE email = ?1";
 }
 
 /// API key queries.
@@ -102,6 +105,12 @@ impl ApiKeys {
 
     pub const SELECT_BY_ID_AND_USER: &'static str =
         "SELECT id, user_id, key_hash, name, created_at, last_used_at, is_active FROM api_keys WHERE id = ?1 AND user_id = ?2";
+
+    pub const SELECT_BY_ID: &'static str =
+        "SELECT id, user_id, key_hash, name, created_at, last_used_at, is_active FROM api_keys WHERE id = ?1";
+
+    pub const COUNT_BY_ID_AND_USER: &'static str =
+        "SELECT COUNT(*) FROM api_keys WHERE id = ?1 AND user_id = ?2";
 }
 
 /// URL-related queries for CRUD operations.
