@@ -10,9 +10,10 @@ use crate::config::Config;
 use crate::db::DbPool;
 use crate::errors::AppError;
 use crate::models::{
-    ApiKeyListResponse, ApiKeyResponse, CreateApiKeyRequest, CreateApiKeyResponse,
-    CreateUrlRequest, CreateUrlResponse, ListUrlsQuery, MessageResponse, RegisterRequest,
-    RegisterResponse, UrlListResponse, UrlResponse,
+    ApiKeyListResponse, ApiKeyResponse, BulkCreateUrlRequest, BulkDeleteUrlRequest,
+    BulkOperationStatus, CreateApiKeyRequest, CreateApiKeyResponse, CreateUrlRequest,
+    CreateUrlResponse, ListUrlsQuery, MessageResponse, RegisterRequest, RegisterResponse,
+    UrlListResponse, UrlResponse,
 };
 use crate::services;
 
@@ -28,6 +29,9 @@ pub fn configure_routes(cfg: &mut web::ServiceConfig) {
                     .service(list_api_keys)
                     .service(revoke_api_key),
             )
+            // Bulk URL operations (must be registered before single-item routes)
+            .service(bulk_create_urls)
+            .service(bulk_delete_urls)
             // URL routes (all protected)
             .service(create_short_url)
             .service(list_urls)
@@ -335,6 +339,117 @@ async fn delete_url_by_id(
     services::delete_url(&pool, id, user.user_id)?;
 
     Ok(HttpResponse::Ok().json(MessageResponse::new("URL deleted successfully")))
+}
+
+// ============================================================================
+// Bulk URL Endpoints
+// ============================================================================
+
+/// Bulk create multiple short URLs
+///
+/// # Request Body
+/// ```json
+/// {
+///     "urls": [
+///         { "url": "https://example1.com", "custom_code": "ex1" },
+///         { "url": "https://example2.com", "expires_in_hours": 24 }
+///     ]
+/// }
+/// ```
+///
+/// # Response
+/// - 201 Created: All items succeeded
+/// - 207 Multi-Status: Partial success or all failed (check response body)
+///
+/// ```json
+/// {
+///     "status": "success",
+///     "total": 2,
+///     "succeeded": 2,
+///     "failed": 0,
+///     "results": [...]
+/// }
+/// ```
+#[post("/urls/bulk")]
+async fn bulk_create_urls(
+    user: AuthenticatedUser,
+    pool: web::Data<DbPool>,
+    config: web::Data<Config>,
+    body: web::Json<BulkCreateUrlRequest>,
+) -> Result<HttpResponse, AppError> {
+    // Validate input
+    body.validate()
+        .map_err(|e| AppError::ValidationError(format!("Invalid input: {}", e)))?;
+
+    // Validate each URL format
+    for (index, item) in body.urls.iter().enumerate() {
+        url::Url::parse(&item.url).map_err(|_| {
+            AppError::ValidationError(format!("Invalid URL format at index {}", index))
+        })?;
+    }
+
+    // Perform bulk create
+    let response = services::bulk_create_urls(
+        &pool,
+        &body.urls,
+        config.short_code_length,
+        user.user_id,
+        &config.base_url,
+    )?;
+
+    // Return appropriate status code based on results
+    let status_code = if response.status == BulkOperationStatus::Success {
+        actix_web::http::StatusCode::CREATED
+    } else {
+        actix_web::http::StatusCode::MULTI_STATUS
+    };
+
+    Ok(HttpResponse::build(status_code).json(response))
+}
+
+/// Bulk delete multiple URLs by ID
+///
+/// # Request Body
+/// ```json
+/// {
+///     "ids": [1, 2, 3]
+/// }
+/// ```
+///
+/// # Response
+/// - 200 OK: All items succeeded
+/// - 207 Multi-Status: Partial success or all failed (check response body)
+///
+/// ```json
+/// {
+///     "status": "success",
+///     "total": 3,
+///     "succeeded": 3,
+///     "failed": 0,
+///     "results": [...]
+/// }
+/// ```
+#[delete("/urls/bulk")]
+async fn bulk_delete_urls(
+    user: AuthenticatedUser,
+    pool: web::Data<DbPool>,
+    body: web::Json<BulkDeleteUrlRequest>,
+) -> Result<HttpResponse, AppError> {
+    // Validate input
+    body.validate()
+        .map_err(|e| AppError::ValidationError(format!("Invalid input: {}", e)))?;
+
+    // Perform bulk delete
+    let response = services::bulk_delete_urls(&pool, &body.ids, user.user_id)?;
+
+    // Return appropriate status code based on results
+    let status_code = if response.status == BulkOperationStatus::Success {
+        actix_web::http::StatusCode::OK
+    } else {
+        actix_web::http::StatusCode::MULTI_STATUS
+    };
+
+    Ok(HttpResponse::build(status_code).json(response))
 }
 
 // ============================================================================
@@ -649,5 +764,152 @@ mod tests {
 
         let resp: actix_web::dev::ServiceResponse = test::call_service(&app, req).await;
         assert_eq!(resp.status(), 404);
+    }
+
+    // ========================================================================
+    // Bulk Operation Handler Tests
+    // ========================================================================
+
+    #[actix_rt::test]
+    async fn test_bulk_create_endpoint() {
+        let pool = setup_test_pool();
+
+        // Register a user
+        let (_, api_key) = services::register_user(&pool, "test@example.com").unwrap();
+
+        let app = setup_test_app(pool).await;
+
+        // Bulk create URLs
+        let req = test::TestRequest::post()
+            .uri("/api/urls/bulk")
+            .insert_header(("X-API-Key", api_key))
+            .set_json(serde_json::json!({
+                "urls": [
+                    { "url": "https://example1.com", "custom_code": "bulk_e1" },
+                    { "url": "https://example2.com", "custom_code": "bulk_e2" }
+                ]
+            }))
+            .to_request();
+
+        let resp: actix_web::dev::ServiceResponse = test::call_service(&app, req).await;
+        assert_eq!(resp.status(), 201);
+
+        let body: crate::models::BulkCreateUrlResponse = test::read_body_json(resp).await;
+        assert_eq!(body.status, BulkOperationStatus::Success);
+        assert_eq!(body.total, 2);
+        assert_eq!(body.succeeded, 2);
+        assert_eq!(body.failed, 0);
+    }
+
+    #[actix_rt::test]
+    async fn test_bulk_create_requires_auth() {
+        let pool = setup_test_pool();
+        let app = setup_test_app(pool).await;
+
+        // Try bulk create without auth
+        let req = test::TestRequest::post()
+            .uri("/api/urls/bulk")
+            .set_json(serde_json::json!({
+                "urls": [
+                    { "url": "https://example.com" }
+                ]
+            }))
+            .to_request();
+
+        let resp: actix_web::dev::ServiceResponse = test::call_service(&app, req).await;
+        assert_eq!(resp.status(), 401);
+    }
+
+    #[actix_rt::test]
+    async fn test_bulk_create_validates_limit() {
+        let pool = setup_test_pool();
+
+        // Register a user
+        let (_, api_key) = services::register_user(&pool, "test@example.com").unwrap();
+
+        let app = setup_test_app(pool).await;
+
+        // Create request with >100 URLs
+        let urls: Vec<serde_json::Value> = (0..101)
+            .map(|i| serde_json::json!({ "url": format!("https://example{}.com", i) }))
+            .collect();
+
+        let req = test::TestRequest::post()
+            .uri("/api/urls/bulk")
+            .insert_header(("X-API-Key", api_key))
+            .set_json(serde_json::json!({ "urls": urls }))
+            .to_request();
+
+        let resp: actix_web::dev::ServiceResponse = test::call_service(&app, req).await;
+        assert_eq!(resp.status(), 400);
+    }
+
+    #[actix_rt::test]
+    async fn test_bulk_delete_endpoint() {
+        let pool = setup_test_pool();
+
+        // Register a user and create some URLs
+        let (user, api_key) = services::register_user(&pool, "test@example.com").unwrap();
+
+        let mut ids = vec![];
+        for i in 0..2 {
+            let request = CreateUrlRequest {
+                url: format!("https://todelete{}.com", i),
+                custom_code: Some(format!("todel{}", i)),
+                expires_in_hours: None,
+            };
+            let url = services::create_url(&pool, &request, 7, user.id).unwrap();
+            ids.push(url.id);
+        }
+
+        let app = setup_test_app(pool).await;
+
+        // Bulk delete
+        let req = test::TestRequest::delete()
+            .uri("/api/urls/bulk")
+            .insert_header(("X-API-Key", api_key))
+            .set_json(serde_json::json!({ "ids": ids }))
+            .to_request();
+
+        let resp: actix_web::dev::ServiceResponse = test::call_service(&app, req).await;
+        assert_eq!(resp.status(), 200);
+
+        let body: crate::models::BulkDeleteUrlResponse = test::read_body_json(resp).await;
+        assert_eq!(body.status, BulkOperationStatus::Success);
+        assert_eq!(body.total, 2);
+        assert_eq!(body.succeeded, 2);
+    }
+
+    #[actix_rt::test]
+    async fn test_bulk_operations_return_207_on_partial() {
+        let pool = setup_test_pool();
+
+        // Register a user
+        let (user, api_key) = services::register_user(&pool, "test@example.com").unwrap();
+
+        // Create one URL
+        let request = CreateUrlRequest {
+            url: "https://existing.com".to_string(),
+            custom_code: Some("exists207".to_string()),
+            expires_in_hours: None,
+        };
+        let url = services::create_url(&pool, &request, 7, user.id).unwrap();
+
+        let app = setup_test_app(pool).await;
+
+        // Bulk delete with one valid, one invalid ID
+        let req = test::TestRequest::delete()
+            .uri("/api/urls/bulk")
+            .insert_header(("X-API-Key", api_key))
+            .set_json(serde_json::json!({ "ids": [url.id, 99999] }))
+            .to_request();
+
+        let resp: actix_web::dev::ServiceResponse = test::call_service(&app, req).await;
+        assert_eq!(resp.status(), 207); // Multi-Status
+
+        let body: crate::models::BulkDeleteUrlResponse = test::read_body_json(resp).await;
+        assert_eq!(body.status, BulkOperationStatus::PartialSuccess);
+        assert_eq!(body.succeeded, 1);
+        assert_eq!(body.failed, 1);
     }
 }
