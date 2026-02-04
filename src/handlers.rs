@@ -10,10 +10,11 @@ use crate::config::Config;
 use crate::db::DbPool;
 use crate::errors::AppError;
 use crate::models::{
-    ApiKeyListResponse, ApiKeyResponse, BulkCreateUrlRequest, BulkDeleteUrlRequest,
-    BulkOperationStatus, CreateApiKeyRequest, CreateApiKeyResponse, CreateUrlRequest,
-    CreateUrlResponse, ListUrlsQuery, MessageResponse, RegisterRequest, RegisterResponse,
-    UrlListResponse, UrlResponse,
+    AddTagToUrlRequest, ApiKeyListResponse, ApiKeyResponse, BulkCreateUrlRequest,
+    BulkDeleteUrlRequest, BulkOperationStatus, CreateApiKeyRequest, CreateApiKeyResponse,
+    CreateTagRequest, CreateUrlRequest, CreateUrlResponse, ListUrlsQuery, MessageResponse,
+    RegisterRequest, RegisterResponse, TagListResponse, TagResponse, UrlListResponse, UrlResponse,
+    UrlWithTagsResponse, UrlsByTagResponse,
 };
 use crate::services;
 
@@ -29,6 +30,13 @@ pub fn configure_routes(cfg: &mut web::ServiceConfig) {
                     .service(list_api_keys)
                     .service(revoke_api_key),
             )
+            // Tag routes
+            .service(create_tag)
+            .service(list_tags)
+            .service(delete_tag)
+            .service(get_urls_by_tag)
+            .service(add_tag_to_url)
+            .service(remove_tag_from_url)
             // Bulk URL operations (must be registered before single-item routes)
             .service(bulk_create_urls)
             .service(bulk_delete_urls)
@@ -450,6 +458,197 @@ async fn bulk_delete_urls(
     };
 
     Ok(HttpResponse::build(status_code).json(response))
+}
+
+// ============================================================================
+// Tag Endpoints
+// ============================================================================
+
+/// Create a new tag
+///
+/// # Request Body
+/// ```json
+/// {
+///     "name": "Important"
+/// }
+/// ```
+///
+/// # Response
+/// ```json
+/// {
+///     "id": 1,
+///     "name": "Important",
+///     "created_at": "2024-01-01 12:00:00"
+/// }
+/// ```
+#[post("/tags")]
+async fn create_tag(
+    user: AuthenticatedUser,
+    pool: web::Data<DbPool>,
+    body: web::Json<CreateTagRequest>,
+) -> Result<HttpResponse, AppError> {
+    // Validate input
+    body.validate()
+        .map_err(|e| AppError::ValidationError(format!("Invalid input: {}", e)))?;
+
+    let tag = services::create_tag(&pool, &body.name, user.user_id)?;
+
+    let response = TagResponse::from_tag(&tag);
+    Ok(HttpResponse::Created().json(response))
+}
+
+/// List all tags for the authenticated user
+///
+/// # Response
+/// ```json
+/// {
+///     "tags": [
+///         { "id": 1, "name": "Important", "created_at": "..." },
+///         { "id": 2, "name": "Work", "created_at": "..." }
+///     ]
+/// }
+/// ```
+#[get("/tags")]
+async fn list_tags(
+    user: AuthenticatedUser,
+    pool: web::Data<DbPool>,
+) -> Result<HttpResponse, AppError> {
+    let tags = services::list_tags(&pool, user.user_id)?;
+
+    let tag_responses: Vec<TagResponse> = tags.iter().map(TagResponse::from_tag).collect();
+
+    let response = TagListResponse {
+        tags: tag_responses,
+    };
+
+    Ok(HttpResponse::Ok().json(response))
+}
+
+/// Delete a tag
+///
+/// # Path Parameters
+/// - `id`: The tag ID to delete
+///
+/// # Response
+/// ```json
+/// {
+///     "message": "Tag deleted successfully"
+/// }
+/// ```
+#[delete("/tags/{id}")]
+async fn delete_tag(
+    user: AuthenticatedUser,
+    pool: web::Data<DbPool>,
+    path: web::Path<i64>,
+) -> Result<HttpResponse, AppError> {
+    let tag_id = path.into_inner();
+    services::delete_tag(&pool, tag_id, user.user_id)?;
+
+    Ok(HttpResponse::Ok().json(MessageResponse::new("Tag deleted successfully")))
+}
+
+/// Add a tag to a URL
+///
+/// # Path Parameters
+/// - `id`: The URL ID
+///
+/// # Request Body
+/// ```json
+/// {
+///     "tag_id": 1
+/// }
+/// ```
+///
+/// # Response
+/// ```json
+/// {
+///     "message": "Tag added to URL successfully"
+/// }
+/// ```
+#[post("/urls/{id}/tags")]
+async fn add_tag_to_url(
+    user: AuthenticatedUser,
+    pool: web::Data<DbPool>,
+    path: web::Path<i64>,
+    body: web::Json<AddTagToUrlRequest>,
+) -> Result<HttpResponse, AppError> {
+    let url_id = path.into_inner();
+    services::add_tag_to_url(&pool, url_id, body.tag_id, user.user_id)?;
+
+    Ok(HttpResponse::Created().json(MessageResponse::new("Tag added to URL successfully")))
+}
+
+/// Remove a tag from a URL
+///
+/// # Path Parameters
+/// - `id`: The URL ID
+/// - `tag_id`: The tag ID to remove
+///
+/// # Response
+/// ```json
+/// {
+///     "message": "Tag removed from URL successfully"
+/// }
+/// ```
+#[delete("/urls/{id}/tags/{tag_id}")]
+async fn remove_tag_from_url(
+    user: AuthenticatedUser,
+    pool: web::Data<DbPool>,
+    path: web::Path<(i64, i64)>,
+) -> Result<HttpResponse, AppError> {
+    let (url_id, tag_id) = path.into_inner();
+    services::remove_tag_from_url(&pool, url_id, tag_id, user.user_id)?;
+
+    Ok(HttpResponse::Ok().json(MessageResponse::new("Tag removed from URL successfully")))
+}
+
+/// Get all URLs with a specific tag
+///
+/// # Path Parameters
+/// - `id`: The tag ID
+///
+/// # Response
+/// ```json
+/// {
+///     "urls": [
+///         { "id": 1, "short_code": "abc123", "original_url": "...", "tags": [...] }
+///     ]
+/// }
+/// ```
+#[get("/tags/{id}/urls")]
+async fn get_urls_by_tag(
+    user: AuthenticatedUser,
+    pool: web::Data<DbPool>,
+    config: web::Data<Config>,
+    path: web::Path<i64>,
+) -> Result<HttpResponse, AppError> {
+    let tag_id = path.into_inner();
+    let urls = services::get_urls_by_tag(&pool, tag_id, user.user_id)?;
+
+    // For each URL, also get its tags
+    let mut url_responses: Vec<UrlWithTagsResponse> = Vec::new();
+    for url in urls {
+        let tags = services::get_tags_for_url(&pool, url.id, user.user_id)?;
+        let tag_responses: Vec<TagResponse> = tags.iter().map(TagResponse::from_tag).collect();
+
+        url_responses.push(UrlWithTagsResponse {
+            id: url.id,
+            short_code: url.short_code.clone(),
+            short_url: format!("{}/{}", config.base_url, url.short_code),
+            original_url: url.original_url,
+            clicks: url.clicks,
+            created_at: url.created_at,
+            updated_at: url.updated_at,
+            expires_at: url.expires_at,
+            tags: tag_responses,
+        });
+    }
+
+    let response = UrlsByTagResponse {
+        urls: url_responses,
+    };
+
+    Ok(HttpResponse::Ok().json(response))
 }
 
 // ============================================================================
@@ -911,5 +1110,170 @@ mod tests {
         assert_eq!(body.status, BulkOperationStatus::PartialSuccess);
         assert_eq!(body.succeeded, 1);
         assert_eq!(body.failed, 1);
+    }
+
+    // ========================================================================
+    // Tag Handler Tests
+    // ========================================================================
+
+    #[actix_rt::test]
+    async fn test_create_tag_endpoint() {
+        let pool = setup_test_pool();
+
+        // Register a user
+        let (_, api_key) = services::register_user(&pool, "test@example.com").unwrap();
+
+        let app = setup_test_app(pool).await;
+
+        // Create a tag
+        let req = test::TestRequest::post()
+            .uri("/api/tags")
+            .insert_header(("X-API-Key", api_key))
+            .set_json(serde_json::json!({
+                "name": "Important"
+            }))
+            .to_request();
+
+        let resp: actix_web::dev::ServiceResponse = test::call_service(&app, req).await;
+        assert_eq!(resp.status(), 201);
+
+        let body: TagResponse = test::read_body_json(resp).await;
+        assert_eq!(body.name, "Important");
+    }
+
+    #[actix_rt::test]
+    async fn test_list_tags_endpoint() {
+        let pool = setup_test_pool();
+
+        // Register a user and create tags
+        let (user, api_key) = services::register_user(&pool, "test@example.com").unwrap();
+        services::create_tag(&pool, "Work", user.id).unwrap();
+        services::create_tag(&pool, "Personal", user.id).unwrap();
+
+        let app = setup_test_app(pool).await;
+
+        // List tags
+        let req = test::TestRequest::get()
+            .uri("/api/tags")
+            .insert_header(("X-API-Key", api_key))
+            .to_request();
+
+        let resp: actix_web::dev::ServiceResponse = test::call_service(&app, req).await;
+        assert!(resp.status().is_success());
+
+        let body: TagListResponse = test::read_body_json(resp).await;
+        assert_eq!(body.tags.len(), 2);
+    }
+
+    #[actix_rt::test]
+    async fn test_delete_tag_endpoint() {
+        let pool = setup_test_pool();
+
+        // Register a user and create a tag
+        let (user, api_key) = services::register_user(&pool, "test@example.com").unwrap();
+        let tag = services::create_tag(&pool, "ToDelete", user.id).unwrap();
+
+        let app = setup_test_app(pool).await;
+
+        // Delete the tag
+        let req = test::TestRequest::delete()
+            .uri(&format!("/api/tags/{}", tag.id))
+            .insert_header(("X-API-Key", api_key))
+            .to_request();
+
+        let resp: actix_web::dev::ServiceResponse = test::call_service(&app, req).await;
+        assert!(resp.status().is_success());
+    }
+
+    #[actix_rt::test]
+    async fn test_add_tag_to_url_endpoint() {
+        let pool = setup_test_pool();
+
+        // Register a user, create a tag, and create a URL
+        let (user, api_key) = services::register_user(&pool, "test@example.com").unwrap();
+        let tag = services::create_tag(&pool, "Important", user.id).unwrap();
+
+        let request = CreateUrlRequest {
+            url: "https://example.com".to_string(),
+            custom_code: Some("tag_test".to_string()),
+            expires_in_hours: None,
+        };
+        let url = services::create_url(&pool, &request, 7, user.id).unwrap();
+
+        let app = setup_test_app(pool).await;
+
+        // Add tag to URL
+        let req = test::TestRequest::post()
+            .uri(&format!("/api/urls/{}/tags", url.id))
+            .insert_header(("X-API-Key", api_key))
+            .set_json(serde_json::json!({
+                "tag_id": tag.id
+            }))
+            .to_request();
+
+        let resp: actix_web::dev::ServiceResponse = test::call_service(&app, req).await;
+        assert_eq!(resp.status(), 201);
+    }
+
+    #[actix_rt::test]
+    async fn test_tag_endpoints_require_auth() {
+        let pool = setup_test_pool();
+        let app = setup_test_app(pool).await;
+
+        // Try to create tag without auth
+        let req = test::TestRequest::post()
+            .uri("/api/tags")
+            .set_json(serde_json::json!({
+                "name": "Test"
+            }))
+            .to_request();
+
+        let resp: actix_web::dev::ServiceResponse = test::call_service(&app, req).await;
+        assert_eq!(resp.status(), 401);
+
+        // Try to list tags without auth
+        let req = test::TestRequest::get().uri("/api/tags").to_request();
+
+        let resp: actix_web::dev::ServiceResponse = test::call_service(&app, req).await;
+        assert_eq!(resp.status(), 401);
+    }
+
+    #[actix_rt::test]
+    async fn test_get_urls_by_tag_endpoint() {
+        let pool = setup_test_pool();
+
+        // Register a user, create a tag, and create URLs
+        let (user, api_key) = services::register_user(&pool, "test@example.com").unwrap();
+        let tag = services::create_tag(&pool, "Work", user.id).unwrap();
+
+        let request1 = CreateUrlRequest {
+            url: "https://work1.com".to_string(),
+            custom_code: Some("bytag1".to_string()),
+            expires_in_hours: None,
+        };
+        let url1 = services::create_url(&pool, &request1, 7, user.id).unwrap();
+        services::add_tag_to_url(&pool, url1.id, tag.id, user.id).unwrap();
+
+        let request2 = CreateUrlRequest {
+            url: "https://work2.com".to_string(),
+            custom_code: Some("bytag2".to_string()),
+            expires_in_hours: None,
+        };
+        let url2 = services::create_url(&pool, &request2, 7, user.id).unwrap();
+        services::add_tag_to_url(&pool, url2.id, tag.id, user.id).unwrap();
+
+        let app = setup_test_app(pool).await;
+
+        // Get URLs by tag
+        let req = test::TestRequest::get()
+            .uri(&format!("/api/tags/{}/urls", tag.id))
+            .insert_header(("X-API-Key", api_key))
+            .to_request();
+
+        let resp: actix_web::dev::ServiceResponse = test::call_service(&app, req).await;
+        assert!(resp.status().is_success());
+
+        let body: UrlsByTagResponse = test::read_body_json(resp).await;
+        assert_eq!(body.urls.len(), 2);
     }
 }

@@ -13,6 +13,7 @@ A fast, lightweight URL shortener built with **Rust**, **Actix-web**, and **SQLi
 - 🔑 **Multiple API keys** - create, list, and revoke API keys per user
 - 👤 **URL ownership** - users can only access their own URLs
 - 📦 **Bulk operations** - create or delete up to 100 URLs in a single request
+- 🏷️ **Tags/Categories** - organize URLs with user-defined tags
 - 🛡️ **Rate limiting** - 60 requests/minute per IP to prevent abuse
 - 🚀 **Blazing fast** - built with Rust and Actix-web
 - 💾 **SQLite storage** - no database server required
@@ -394,6 +395,133 @@ Content-Type: application/json
 
 ---
 
+### Create Tag (Authenticated)
+
+```bash
+POST /api/tags
+X-API-Key: usk_your_key_here
+Content-Type: application/json
+
+{
+    "name": "Important"
+}
+```
+
+**Response (201 Created):**
+```json
+{
+    "id": 1,
+    "name": "Important",
+    "created_at": "2024-01-01 12:00:00"
+}
+```
+
+---
+
+### List Tags (Authenticated)
+
+```bash
+GET /api/tags
+X-API-Key: usk_your_key_here
+```
+
+**Response (200 OK):**
+```json
+{
+    "tags": [
+        { "id": 1, "name": "Important", "created_at": "2024-01-01 12:00:00" },
+        { "id": 2, "name": "Work", "created_at": "2024-01-01 12:00:00" }
+    ]
+}
+```
+
+---
+
+### Delete Tag (Authenticated)
+
+```bash
+DELETE /api/tags/{id}
+X-API-Key: usk_your_key_here
+```
+
+**Response (200 OK):**
+```json
+{
+    "message": "Tag deleted successfully"
+}
+```
+
+> Note: Deleting a tag removes it from all associated URLs.
+
+---
+
+### Add Tag to URL (Authenticated)
+
+```bash
+POST /api/urls/{id}/tags
+X-API-Key: usk_your_key_here
+Content-Type: application/json
+
+{
+    "tag_id": 1
+}
+```
+
+**Response (201 Created):**
+```json
+{
+    "message": "Tag added to URL successfully"
+}
+```
+
+---
+
+### Remove Tag from URL (Authenticated)
+
+```bash
+DELETE /api/urls/{id}/tags/{tag_id}
+X-API-Key: usk_your_key_here
+```
+
+**Response (200 OK):**
+```json
+{
+    "message": "Tag removed from URL successfully"
+}
+```
+
+---
+
+### Get URLs by Tag (Authenticated)
+
+```bash
+GET /api/tags/{id}/urls
+X-API-Key: usk_your_key_here
+```
+
+**Response (200 OK):**
+```json
+{
+    "urls": [
+        {
+            "id": 1,
+            "short_code": "abc123",
+            "short_url": "http://localhost:8080/abc123",
+            "original_url": "https://example.com",
+            "clicks": 42,
+            "created_at": "2024-01-01 12:00:00",
+            "updated_at": "2024-01-15 08:30:00",
+            "expires_at": null,
+            "tags": [
+                { "id": 1, "name": "Important", "created_at": "2024-01-01 12:00:00" }
+            ]
+        }
+    ]
+}
+```
+
+---
+
 ### Health Check (Public)
 
 ```bash
@@ -442,7 +570,7 @@ The API is protected by rate limiting to prevent abuse:
 
 ## Database Schema
 
-The application uses SQLite with four tables:
+The application uses SQLite with six tables:
 
 **users** - Stores registered users
 | Column | Type | Description |
@@ -483,6 +611,21 @@ The application uses SQLite with four tables:
 | `ip_address` | TEXT | Visitor IP address |
 | `user_agent` | TEXT | Browser user agent |
 | `referer` | TEXT | Referring URL |
+
+**tags** - Stores user-defined tags
+| Column | Type | Description |
+|--------|------|-------------|
+| `id` | INTEGER | Primary key |
+| `name` | TEXT | Tag name (unique per user) |
+| `user_id` | INTEGER | Foreign key to users |
+| `created_at` | TEXT | Creation timestamp |
+
+**url_tags** - Junction table for URL-tag associations
+| Column | Type | Description |
+|--------|------|-------------|
+| `url_id` | INTEGER | Foreign key to urls |
+| `tag_id` | INTEGER | Foreign key to tags |
+| PRIMARY KEY | (url_id, tag_id) | Composite key |
 
 ## Configuration
 
@@ -554,6 +697,34 @@ curl -X DELETE http://localhost:8080/api/urls/bulk \
 # Test redirect (follow redirects) - no auth needed
 curl -L http://localhost:8080/docs
 
+# Create a tag
+curl -X POST http://localhost:8080/api/tags \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: YOUR_API_KEY" \
+  -d '{"name": "Important"}'
+
+# List tags
+curl -H "X-API-Key: YOUR_API_KEY" \
+  http://localhost:8080/api/tags
+
+# Add tag to URL
+curl -X POST http://localhost:8080/api/urls/1/tags \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: YOUR_API_KEY" \
+  -d '{"tag_id": 1}'
+
+# Get URLs by tag
+curl -H "X-API-Key: YOUR_API_KEY" \
+  http://localhost:8080/api/tags/1/urls
+
+# Remove tag from URL
+curl -X DELETE -H "X-API-Key: YOUR_API_KEY" \
+  http://localhost:8080/api/urls/1/tags/1
+
+# Delete tag
+curl -X DELETE -H "X-API-Key: YOUR_API_KEY" \
+  http://localhost:8080/api/tags/1
+
 # Create another API key
 curl -X POST http://localhost:8080/api/auth/keys \
   -H "Content-Type: application/json" \
@@ -578,7 +749,7 @@ Here are some ideas for extending this project:
 3. **Custom Domains** - Support multiple base URLs
 4. ~~**Bulk Operations** - Create/delete multiple URLs at once~~ ✅ Done!
 5. **Search** - Search URLs by original URL or code
-6. **Tags/Categories** - Organize URLs with tags
+6. ~~**Tags/Categories** - Organize URLs with tags~~ ✅ Done!
 7. **Web UI** - Add a frontend with HTML templates or SPA
 8. **Caching** - Add Redis or in-memory caching for hot URLs
 9. **Metrics** - Add Prometheus metrics for monitoring

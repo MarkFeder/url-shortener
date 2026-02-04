@@ -90,6 +90,14 @@ pub fn run_migrations(pool: &DbPool) -> Result<(), AppError> {
     conn.execute(Schema::CREATE_CLICK_LOGS_TABLE, [])
         .map_err(|e| AppError::DatabaseError(format!("Failed to create click_logs table: {}", e)))?;
 
+    // Create tags table
+    conn.execute(Schema::CREATE_TAGS_TABLE, [])
+        .map_err(|e| AppError::DatabaseError(format!("Failed to create tags table: {}", e)))?;
+
+    // Create url_tags junction table
+    conn.execute(Schema::CREATE_URL_TAGS_TABLE, [])
+        .map_err(|e| AppError::DatabaseError(format!("Failed to create url_tags table: {}", e)))?;
+
     // Migration: Add user_id column to existing urls table if it doesn't exist
     // This handles upgrading from the old schema
     let has_user_id: i32 = conn
