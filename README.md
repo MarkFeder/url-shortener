@@ -12,6 +12,7 @@ A fast, lightweight URL shortener built with **Rust**, **Actix-web**, and **SQLi
 - 🔐 **Per-user authentication** - email registration with API key management
 - 🔑 **Multiple API keys** - create, list, and revoke API keys per user
 - 👤 **URL ownership** - users can only access their own URLs
+- 📦 **Bulk operations** - create or delete up to 100 URLs in a single request
 - 🛡️ **Rate limiting** - 60 requests/minute per IP to prevent abuse
 - 🚀 **Blazing fast** - built with Rust and Actix-web
 - 💾 **SQLite storage** - no database server required
@@ -298,6 +299,101 @@ X-API-Key: usk_your_key_here
 
 ---
 
+### Bulk Create URLs (Authenticated)
+
+Create multiple URLs in a single request (max 100).
+
+```bash
+POST /api/urls/bulk
+X-API-Key: usk_your_key_here
+Content-Type: application/json
+
+{
+    "urls": [
+        { "url": "https://example1.com", "custom_code": "ex1" },
+        { "url": "https://example2.com", "expires_in_hours": 24 },
+        { "url": "https://example3.com" }
+    ]
+}
+```
+
+**Response (201 Created - all succeeded):**
+```json
+{
+    "status": "success",
+    "total": 3,
+    "succeeded": 3,
+    "failed": 0,
+    "results": [
+        { "index": 0, "success": true, "data": { "short_code": "ex1", ... } },
+        { "index": 1, "success": true, "data": { "short_code": "a1b2c3d", ... } },
+        { "index": 2, "success": true, "data": { "short_code": "x9y8z7w", ... } }
+    ]
+}
+```
+
+**Response (207 Multi-Status - partial success):**
+```json
+{
+    "status": "partial_success",
+    "total": 2,
+    "succeeded": 1,
+    "failed": 1,
+    "results": [
+        { "index": 0, "success": true, "data": { ... } },
+        { "index": 1, "success": false, "error": { "code": "DUPLICATE_CODE", "message": "..." } }
+    ]
+}
+```
+
+---
+
+### Bulk Delete URLs (Authenticated)
+
+Delete multiple URLs by ID in a single request (max 100).
+
+```bash
+DELETE /api/urls/bulk
+X-API-Key: usk_your_key_here
+Content-Type: application/json
+
+{
+    "ids": [1, 2, 3]
+}
+```
+
+**Response (200 OK - all succeeded):**
+```json
+{
+    "status": "success",
+    "total": 3,
+    "succeeded": 3,
+    "failed": 0,
+    "results": [
+        { "id": 1, "success": true },
+        { "id": 2, "success": true },
+        { "id": 3, "success": true }
+    ]
+}
+```
+
+**Response (207 Multi-Status - partial success):**
+```json
+{
+    "status": "partial_success",
+    "total": 3,
+    "succeeded": 2,
+    "failed": 1,
+    "results": [
+        { "id": 1, "success": true },
+        { "id": 2, "success": true },
+        { "id": 999, "success": false, "error": { "code": "NOT_FOUND", "message": "..." } }
+    ]
+}
+```
+
+---
+
 ### Health Check (Public)
 
 ```bash
@@ -443,6 +539,18 @@ curl -H "X-API-Key: YOUR_API_KEY" \
 curl -X DELETE -H "X-API-Key: YOUR_API_KEY" \
   http://localhost:8080/api/urls/1
 
+# Bulk create URLs
+curl -X POST http://localhost:8080/api/urls/bulk \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: YOUR_API_KEY" \
+  -d '{"urls": [{"url": "https://example1.com"}, {"url": "https://example2.com", "custom_code": "ex2"}]}'
+
+# Bulk delete URLs
+curl -X DELETE http://localhost:8080/api/urls/bulk \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: YOUR_API_KEY" \
+  -d '{"ids": [1, 2, 3]}'
+
 # Test redirect (follow redirects) - no auth needed
 curl -L http://localhost:8080/docs
 
@@ -468,7 +576,7 @@ Here are some ideas for extending this project:
 1. ~~**Authentication** - Add API keys or JWT authentication~~ ✅ Done!
 2. **QR Codes** - Generate QR codes for short URLs
 3. **Custom Domains** - Support multiple base URLs
-4. **Bulk Operations** - Create/delete multiple URLs at once
+4. ~~**Bulk Operations** - Create/delete multiple URLs at once~~ ✅ Done!
 5. **Search** - Search URLs by original URL or code
 6. **Tags/Categories** - Organize URLs with tags
 7. **Web UI** - Add a frontend with HTML templates or SPA
