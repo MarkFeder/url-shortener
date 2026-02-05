@@ -41,7 +41,9 @@ This project demonstrates:
 12. **Caching** - In-memory caching with TTL and automatic invalidation
 13. **Metrics** - Prometheus metrics for observability and monitoring
 14. **QR Code Generation** - Creating QR codes with the qrcode crate
-15. **Testing** - Unit and integration tests
+15. **Query Optimization** - Avoiding N+1 queries with batch loading patterns
+16. **Code Organization** - Row mapping helpers and reusable ownership checks
+17. **Testing** - Unit and integration tests (100+ tests)
 
 ## Project Structure
 
