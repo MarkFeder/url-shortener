@@ -15,9 +15,10 @@ use crate::models::{
     AddTagToUrlRequest, ApiKeyListResponse, ApiKeyResponse, BulkCreateUrlRequest,
     BulkDeleteUrlRequest, BulkOperationStatus, CreateApiKeyRequest, CreateApiKeyResponse,
     CreateTagRequest, CreateUrlRequest, CreateUrlResponse, ListUrlsQuery, MessageResponse,
-    RegisterRequest, RegisterResponse, TagListResponse, TagResponse, UrlListResponse, UrlResponse,
-    UrlWithTagsResponse, UrlsByTagResponse,
+    QrCodeQuery, RegisterRequest, RegisterResponse, TagListResponse, TagResponse,
+    UrlListResponse, UrlResponse, UrlWithTagsResponse, UrlsByTagResponse,
 };
+use crate::qr::{self, QrFormat, QrOptions};
 use crate::services;
 
 /// Configure all application routes
@@ -47,7 +48,8 @@ pub fn configure_routes(cfg: &mut web::ServiceConfig) {
             .service(list_urls)
             .service(get_url_by_id)
             .service(delete_url_by_id)
-            .service(get_url_stats),
+            .service(get_url_stats)
+            .service(get_url_qr_code),
     )
     // Register specific routes before catch-all route
     .service(health_check)
@@ -334,6 +336,52 @@ async fn get_url_stats(
     });
 
     Ok(HttpResponse::Ok().json(response))
+}
+
+/// Get QR code for a URL
+///
+/// # Path Parameters
+/// - `id`: The URL ID
+///
+/// # Query Parameters
+/// - `format`: Output format - "png" (default) or "svg"
+/// - `size`: Size in pixels (default: 256, min: 64, max: 1024)
+///
+/// # Response
+/// Returns the QR code image in the requested format
+#[get("/urls/{id}/qr")]
+async fn get_url_qr_code(
+    user: AuthenticatedUser,
+    pool: web::Data<DbPool>,
+    config: web::Data<Config>,
+    path: web::Path<i64>,
+    query: web::Query<QrCodeQuery>,
+) -> Result<HttpResponse, AppError> {
+    let id = path.into_inner();
+
+    // Verify the URL exists and belongs to the user
+    let url = services::get_url_by_id(&pool, id, user.user_id)?;
+
+    // Build the full short URL
+    let short_url = format!("{}/{}", config.base_url, url.short_code);
+
+    // Parse and validate options
+    let format = query
+        .format
+        .as_ref()
+        .map(|f| QrFormat::from_str(f))
+        .unwrap_or_default();
+
+    let size = query.size.unwrap_or(256).clamp(64, 1024);
+
+    let options = QrOptions { format, size };
+
+    // Generate QR code
+    let qr_bytes = qr::generate_qr_code(&short_url, &options)?;
+
+    Ok(HttpResponse::Ok()
+        .content_type(format.content_type())
+        .body(qr_bytes))
 }
 
 /// Delete a URL by ID
@@ -1301,5 +1349,176 @@ mod tests {
 
         let body: UrlsByTagResponse = test::read_body_json(resp).await;
         assert_eq!(body.urls.len(), 2);
+    }
+
+    // ========================================================================
+    // QR Code Handler Tests
+    // ========================================================================
+
+    #[actix_rt::test]
+    async fn test_get_qr_code_png() {
+        let pool = setup_test_pool();
+
+        // Register a user and create a URL
+        let (user, api_key) = services::register_user(&pool, "test@example.com").unwrap();
+
+        let request = CreateUrlRequest {
+            url: "https://example.com".to_string(),
+            custom_code: Some("qr_test".to_string()),
+            expires_in_hours: None,
+        };
+        let url = services::create_url(&pool, &request, 7, user.id).unwrap();
+
+        let app = setup_test_app(pool).await;
+
+        // Get QR code as PNG (default)
+        let req = test::TestRequest::get()
+            .uri(&format!("/api/urls/{}/qr", url.id))
+            .insert_header(("X-API-Key", api_key))
+            .to_request();
+
+        let resp: actix_web::dev::ServiceResponse = test::call_service(&app, req).await;
+        assert!(resp.status().is_success());
+
+        // Check content type
+        let content_type = resp.headers().get("content-type").unwrap();
+        assert_eq!(content_type, "image/png");
+
+        // Check that body contains PNG magic bytes
+        let body = test::read_body(resp).await;
+        assert!(body.starts_with(&[0x89, 0x50, 0x4E, 0x47]));
+    }
+
+    #[actix_rt::test]
+    async fn test_get_qr_code_svg() {
+        let pool = setup_test_pool();
+
+        // Register a user and create a URL
+        let (user, api_key) = services::register_user(&pool, "test@example.com").unwrap();
+
+        let request = CreateUrlRequest {
+            url: "https://example.com".to_string(),
+            custom_code: Some("qr_svg_test".to_string()),
+            expires_in_hours: None,
+        };
+        let url = services::create_url(&pool, &request, 7, user.id).unwrap();
+
+        let app = setup_test_app(pool).await;
+
+        // Get QR code as SVG
+        let req = test::TestRequest::get()
+            .uri(&format!("/api/urls/{}/qr?format=svg", url.id))
+            .insert_header(("X-API-Key", api_key))
+            .to_request();
+
+        let resp: actix_web::dev::ServiceResponse = test::call_service(&app, req).await;
+        assert!(resp.status().is_success());
+
+        // Check content type
+        let content_type = resp.headers().get("content-type").unwrap();
+        assert_eq!(content_type, "image/svg+xml");
+
+        // Check that body contains SVG content
+        let body = test::read_body(resp).await;
+        let body_str = String::from_utf8(body.to_vec()).unwrap();
+        assert!(body_str.contains("<svg"));
+    }
+
+    #[actix_rt::test]
+    async fn test_get_qr_code_with_size() {
+        let pool = setup_test_pool();
+
+        // Register a user and create a URL
+        let (user, api_key) = services::register_user(&pool, "test@example.com").unwrap();
+
+        let request = CreateUrlRequest {
+            url: "https://example.com".to_string(),
+            custom_code: Some("qr_size_test".to_string()),
+            expires_in_hours: None,
+        };
+        let url = services::create_url(&pool, &request, 7, user.id).unwrap();
+
+        let app = setup_test_app(pool).await;
+
+        // Get QR code with custom size
+        let req = test::TestRequest::get()
+            .uri(&format!("/api/urls/{}/qr?size=512", url.id))
+            .insert_header(("X-API-Key", api_key))
+            .to_request();
+
+        let resp: actix_web::dev::ServiceResponse = test::call_service(&app, req).await;
+        assert!(resp.status().is_success());
+    }
+
+    #[actix_rt::test]
+    async fn test_get_qr_code_requires_auth() {
+        let pool = setup_test_pool();
+
+        // Register a user and create a URL
+        let (user, _) = services::register_user(&pool, "test@example.com").unwrap();
+
+        let request = CreateUrlRequest {
+            url: "https://example.com".to_string(),
+            custom_code: Some("qr_auth_test".to_string()),
+            expires_in_hours: None,
+        };
+        let url = services::create_url(&pool, &request, 7, user.id).unwrap();
+
+        let app = setup_test_app(pool).await;
+
+        // Try to get QR code without auth
+        let req = test::TestRequest::get()
+            .uri(&format!("/api/urls/{}/qr", url.id))
+            .to_request();
+
+        let resp: actix_web::dev::ServiceResponse = test::call_service(&app, req).await;
+        assert_eq!(resp.status(), 401);
+    }
+
+    #[actix_rt::test]
+    async fn test_get_qr_code_not_found() {
+        let pool = setup_test_pool();
+
+        // Register a user
+        let (_, api_key) = services::register_user(&pool, "test@example.com").unwrap();
+
+        let app = setup_test_app(pool).await;
+
+        // Try to get QR code for non-existent URL
+        let req = test::TestRequest::get()
+            .uri("/api/urls/99999/qr")
+            .insert_header(("X-API-Key", api_key))
+            .to_request();
+
+        let resp: actix_web::dev::ServiceResponse = test::call_service(&app, req).await;
+        assert_eq!(resp.status(), 404);
+    }
+
+    #[actix_rt::test]
+    async fn test_get_qr_code_respects_ownership() {
+        let pool = setup_test_pool();
+
+        // Register two users
+        let (user1, _) = services::register_user(&pool, "user1@example.com").unwrap();
+        let (_, api_key2) = services::register_user(&pool, "user2@example.com").unwrap();
+
+        // Create URL owned by user1
+        let request = CreateUrlRequest {
+            url: "https://example.com".to_string(),
+            custom_code: Some("qr_owner_test".to_string()),
+            expires_in_hours: None,
+        };
+        let url = services::create_url(&pool, &request, 7, user1.id).unwrap();
+
+        let app = setup_test_app(pool).await;
+
+        // User2 tries to get QR code for user1's URL
+        let req = test::TestRequest::get()
+            .uri(&format!("/api/urls/{}/qr", url.id))
+            .insert_header(("X-API-Key", api_key2))
+            .to_request();
+
+        let resp: actix_web::dev::ServiceResponse = test::call_service(&app, req).await;
+        assert_eq!(resp.status(), 404);
     }
 }

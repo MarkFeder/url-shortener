@@ -18,6 +18,7 @@ mod errors;
 mod handlers;
 mod metrics;
 mod models;
+mod qr;
 mod queries;
 mod services;
 

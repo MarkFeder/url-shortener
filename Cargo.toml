@@ -37,6 +37,8 @@ rand = "0.8"             # Random generation for API keys
 moka = { version = "0.12", features = ["sync"] }  # In-memory caching
 actix-web-prom = "0.9"   # Prometheus metrics middleware
 prometheus = "0.13"       # Prometheus metrics
+qrcode = "0.14"           # QR code generation
+image = "0.25"            # Image encoding for QR codes
 
 [dev-dependencies]
 actix-rt = "2"
