@@ -683,26 +683,27 @@ async fn get_urls_by_tag(
     path: web::Path<i64>,
 ) -> Result<HttpResponse, AppError> {
     let tag_id = path.into_inner();
-    let urls = services::get_urls_by_tag(&pool, tag_id, user.user_id)?;
 
-    // For each URL, also get its tags
-    let mut url_responses: Vec<UrlWithTagsResponse> = Vec::new();
-    for url in urls {
-        let tags = services::get_tags_for_url(&pool, url.id, user.user_id)?;
-        let tag_responses: Vec<TagResponse> = tags.iter().map(TagResponse::from_tag).collect();
+    // Use optimized function that fetches URLs with their tags in 2 queries instead of N+1
+    let urls_with_tags = services::get_urls_by_tag_with_tags(&pool, tag_id, user.user_id)?;
 
-        url_responses.push(UrlWithTagsResponse {
-            id: url.id,
-            short_code: url.short_code.clone(),
-            short_url: format!("{}/{}", config.base_url, url.short_code),
-            original_url: url.original_url,
-            clicks: url.clicks,
-            created_at: url.created_at,
-            updated_at: url.updated_at,
-            expires_at: url.expires_at,
-            tags: tag_responses,
-        });
-    }
+    let url_responses: Vec<UrlWithTagsResponse> = urls_with_tags
+        .into_iter()
+        .map(|(url, tags)| {
+            let tag_responses: Vec<TagResponse> = tags.iter().map(TagResponse::from_tag).collect();
+            UrlWithTagsResponse {
+                id: url.id,
+                short_code: url.short_code.clone(),
+                short_url: format!("{}/{}", config.base_url, url.short_code),
+                original_url: url.original_url,
+                clicks: url.clicks,
+                created_at: url.created_at,
+                updated_at: url.updated_at,
+                expires_at: url.expires_at,
+                tags: tag_responses,
+            }
+        })
+        .collect();
 
     let response = UrlsByTagResponse {
         urls: url_responses,

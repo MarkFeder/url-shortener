@@ -31,6 +31,81 @@ const ALPHABET: [char; 62] = [
 /// API key prefix
 const API_KEY_PREFIX: &str = "usk_";
 
+// ============================================================================
+// Row Mapping Helpers
+// ============================================================================
+
+/// Map a database row to a Url struct
+fn map_url_row(row: &rusqlite::Row) -> rusqlite::Result<Url> {
+    Ok(Url {
+        id: row.get(0)?,
+        short_code: row.get(1)?,
+        original_url: row.get(2)?,
+        clicks: row.get(3)?,
+        created_at: row.get(4)?,
+        updated_at: row.get(5)?,
+        expires_at: row.get(6)?,
+        user_id: row.get(7)?,
+    })
+}
+
+/// Map a database row to a User struct
+fn map_user_row(row: &rusqlite::Row) -> rusqlite::Result<User> {
+    Ok(User {
+        id: row.get(0)?,
+        email: row.get(1)?,
+        created_at: row.get(2)?,
+    })
+}
+
+/// Map a database row to a Tag struct
+fn map_tag_row(row: &rusqlite::Row) -> rusqlite::Result<Tag> {
+    Ok(Tag {
+        id: row.get(0)?,
+        name: row.get(1)?,
+        user_id: row.get(2)?,
+        created_at: row.get(3)?,
+    })
+}
+
+/// Map a database row to an ApiKeyRecord struct
+fn map_api_key_row(row: &rusqlite::Row) -> rusqlite::Result<ApiKeyRecord> {
+    Ok(ApiKeyRecord {
+        id: row.get(0)?,
+        user_id: row.get(1)?,
+        key_hash: row.get(2)?,
+        name: row.get(3)?,
+        created_at: row.get(4)?,
+        last_used_at: row.get(5)?,
+        is_active: row.get::<_, i32>(6)? == 1,
+    })
+}
+
+/// Map a database row to a ClickLog struct
+fn map_click_log_row(row: &rusqlite::Row) -> rusqlite::Result<ClickLog> {
+    Ok(ClickLog {
+        id: row.get(0)?,
+        url_id: row.get(1)?,
+        clicked_at: row.get(2)?,
+        ip_address: row.get(3)?,
+        user_agent: row.get(4)?,
+        referer: row.get(5)?,
+    })
+}
+
+/// Check if a resource exists and belongs to the user
+fn check_ownership(
+    conn: &rusqlite::Connection,
+    query: &str,
+    id: i64,
+    user_id: i64,
+) -> Result<bool, AppError> {
+    let count: i32 = conn
+        .query_row(query, params![id, user_id], |row| row.get(0))
+        .unwrap_or(0);
+    Ok(count > 0)
+}
+
 /// Generate a random short code using nanoid
 pub fn generate_short_code(length: usize) -> String {
     nanoid!(length, &ALPHABET)
@@ -83,13 +158,7 @@ pub fn register_user(pool: &DbPool, email: &str) -> Result<(User, String), AppEr
     let user_id = conn.last_insert_rowid();
 
     // Retrieve the created user
-    let user = conn.query_row(Users::SELECT_BY_ID, params![user_id], |row| {
-        Ok(User {
-            id: row.get(0)?,
-            email: row.get(1)?,
-            created_at: row.get(2)?,
-        })
-    })?;
+    let user = conn.query_row(Users::SELECT_BY_ID, params![user_id], map_user_row)?;
 
     // Create first API key
     let api_key = generate_api_key();
@@ -109,19 +178,13 @@ pub fn register_user(pool: &DbPool, email: &str) -> Result<(User, String), AppEr
 pub fn get_user_by_id(pool: &DbPool, user_id: i64) -> Result<User, AppError> {
     let conn = get_conn(pool)?;
 
-    conn.query_row(Users::SELECT_BY_ID, params![user_id], |row| {
-        Ok(User {
-            id: row.get(0)?,
-            email: row.get(1)?,
-            created_at: row.get(2)?,
+    conn.query_row(Users::SELECT_BY_ID, params![user_id], map_user_row)
+        .map_err(|e| match e {
+            rusqlite::Error::QueryReturnedNoRows => {
+                AppError::NotFound(format!("User with ID '{}' not found", user_id))
+            }
+            _ => AppError::DatabaseError(e.to_string()),
         })
-    })
-    .map_err(|e| match e {
-        rusqlite::Error::QueryReturnedNoRows => {
-            AppError::NotFound(format!("User with ID '{}' not found", user_id))
-        }
-        _ => AppError::DatabaseError(e.to_string()),
-    })
 }
 
 // ============================================================================
@@ -140,17 +203,7 @@ pub fn create_api_key(pool: &DbPool, user_id: i64, name: &str) -> Result<(ApiKey
     conn.execute(ApiKeys::INSERT, params![user_id, key_hash, name])?;
     let key_id = conn.last_insert_rowid();
 
-    let record = conn.query_row(ApiKeys::SELECT_BY_ID, params![key_id], |row| {
-        Ok(ApiKeyRecord {
-            id: row.get(0)?,
-            user_id: row.get(1)?,
-            key_hash: row.get(2)?,
-            name: row.get(3)?,
-            created_at: row.get(4)?,
-            last_used_at: row.get(5)?,
-            is_active: row.get::<_, i32>(6)? == 1,
-        })
-    })?;
+    let record = conn.query_row(ApiKeys::SELECT_BY_ID, params![key_id], map_api_key_row)?;
 
     log::info!("Created API key '{}' for user {}", name, user_id);
 
@@ -250,17 +303,7 @@ pub fn list_api_keys(pool: &DbPool, user_id: i64) -> Result<Vec<ApiKeyRecord>, A
     let mut stmt = conn.prepare(ApiKeys::SELECT_BY_USER)?;
 
     let keys = stmt
-        .query_map(params![user_id], |row| {
-            Ok(ApiKeyRecord {
-                id: row.get(0)?,
-                user_id: row.get(1)?,
-                key_hash: row.get(2)?,
-                name: row.get(3)?,
-                created_at: row.get(4)?,
-                last_used_at: row.get(5)?,
-                is_active: row.get::<_, i32>(6)? == 1,
-            })
-        })?
+        .query_map(params![user_id], map_api_key_row)?
         .collect::<Result<Vec<_>, _>>()?;
 
     Ok(keys)
@@ -418,18 +461,7 @@ pub fn get_url_by_code(pool: &DbPool, short_code: &str) -> Result<Url, AppError>
     let conn = get_conn(pool)?;
 
     let url = conn
-        .query_row(Urls::SELECT_BY_CODE, params![short_code], |row| {
-            Ok(Url {
-                id: row.get(0)?,
-                short_code: row.get(1)?,
-                original_url: row.get(2)?,
-                clicks: row.get(3)?,
-                created_at: row.get(4)?,
-                updated_at: row.get(5)?,
-                expires_at: row.get(6)?,
-                user_id: row.get(7)?,
-            })
-        })
+        .query_row(Urls::SELECT_BY_CODE, params![short_code], map_url_row)
         .map_err(|e| match e {
             rusqlite::Error::QueryReturnedNoRows => {
                 AppError::NotFound(format!("URL with code '{}' not found", short_code))
@@ -538,24 +570,13 @@ pub fn get_url_by_code_cached_with_metrics(
 pub fn get_url_by_id(pool: &DbPool, id: i64, user_id: i64) -> Result<Url, AppError> {
     let conn = get_conn(pool)?;
 
-    conn.query_row(Urls::SELECT_BY_ID_AND_USER, params![id, user_id], |row| {
-        Ok(Url {
-            id: row.get(0)?,
-            short_code: row.get(1)?,
-            original_url: row.get(2)?,
-            clicks: row.get(3)?,
-            created_at: row.get(4)?,
-            updated_at: row.get(5)?,
-            expires_at: row.get(6)?,
-            user_id: row.get(7)?,
+    conn.query_row(Urls::SELECT_BY_ID_AND_USER, params![id, user_id], map_url_row)
+        .map_err(|e| match e {
+            rusqlite::Error::QueryReturnedNoRows => {
+                AppError::NotFound(format!("URL with ID '{}' not found", id))
+            }
+            _ => AppError::DatabaseError(e.to_string()),
         })
-    })
-    .map_err(|e| match e {
-        rusqlite::Error::QueryReturnedNoRows => {
-            AppError::NotFound(format!("URL with ID '{}' not found", id))
-        }
-        _ => AppError::DatabaseError(e.to_string()),
-    })
 }
 
 /// List URLs for a specific user with pagination
@@ -573,18 +594,7 @@ pub fn list_urls(pool: &DbPool, user_id: i64, query: &ListUrlsQuery) -> Result<V
     let sql = Urls::list_by_user_with_order(sort_order);
     let mut stmt = conn.prepare(&sql)?;
     let urls = stmt
-        .query_map(params![user_id, limit, offset], |row| {
-            Ok(Url {
-                id: row.get(0)?,
-                short_code: row.get(1)?,
-                original_url: row.get(2)?,
-                clicks: row.get(3)?,
-                created_at: row.get(4)?,
-                updated_at: row.get(5)?,
-                expires_at: row.get(6)?,
-                user_id: row.get(7)?,
-            })
-        })?
+        .query_map(params![user_id, limit, offset], map_url_row)?
         .collect::<Result<Vec<_>, _>>()?;
 
     Ok(urls)
@@ -627,16 +637,7 @@ pub fn get_click_logs(pool: &DbPool, url_id: i64, limit: u32) -> Result<Vec<Clic
     let mut stmt = conn.prepare(ClickLogs::SELECT_BY_URL_ID)?;
 
     let logs = stmt
-        .query_map(params![url_id, limit], |row| {
-            Ok(ClickLog {
-                id: row.get(0)?,
-                url_id: row.get(1)?,
-                clicked_at: row.get(2)?,
-                ip_address: row.get(3)?,
-                user_agent: row.get(4)?,
-                referer: row.get(5)?,
-            })
-        })?
+        .query_map(params![url_id, limit], map_click_log_row)?
         .collect::<Result<Vec<_>, _>>()?;
 
     Ok(logs)
@@ -881,14 +882,7 @@ pub fn create_tag(pool: &DbPool, name: &str, user_id: i64) -> Result<Tag, AppErr
     conn.execute(Tags::INSERT, params![name, user_id])?;
     let tag_id = conn.last_insert_rowid();
 
-    let tag = conn.query_row(Tags::SELECT_BY_ID, params![tag_id], |row| {
-        Ok(Tag {
-            id: row.get(0)?,
-            name: row.get(1)?,
-            user_id: row.get(2)?,
-            created_at: row.get(3)?,
-        })
-    })?;
+    let tag = conn.query_row(Tags::SELECT_BY_ID, params![tag_id], map_tag_row)?;
 
     log::info!("Created tag '{}' for user {}", name, user_id);
     Ok(tag)
@@ -900,14 +894,7 @@ pub fn list_tags(pool: &DbPool, user_id: i64) -> Result<Vec<Tag>, AppError> {
     let mut stmt = conn.prepare(Tags::SELECT_BY_USER)?;
 
     let tags = stmt
-        .query_map(params![user_id], |row| {
-            Ok(Tag {
-                id: row.get(0)?,
-                name: row.get(1)?,
-                user_id: row.get(2)?,
-                created_at: row.get(3)?,
-            })
-        })?
+        .query_map(params![user_id], map_tag_row)?
         .collect::<Result<Vec<_>, _>>()?;
 
     Ok(tags)
@@ -940,15 +927,7 @@ pub fn add_tag_to_url(
     let conn = get_conn(pool)?;
 
     // Verify the URL belongs to the user
-    let url_exists: i32 = conn
-        .query_row(
-            "SELECT COUNT(*) FROM urls WHERE id = ?1 AND user_id = ?2",
-            params![url_id, user_id],
-            |row| row.get(0),
-        )
-        .unwrap_or(0);
-
-    if url_exists == 0 {
+    if !check_ownership(&conn, Urls::COUNT_BY_ID_AND_USER, url_id, user_id)? {
         return Err(AppError::NotFound(format!(
             "URL with ID '{}' not found",
             url_id
@@ -956,13 +935,7 @@ pub fn add_tag_to_url(
     }
 
     // Verify the tag belongs to the user
-    let tag_exists: i32 = conn
-        .query_row(Tags::COUNT_BY_ID_AND_USER, params![tag_id, user_id], |row| {
-            row.get(0)
-        })
-        .unwrap_or(0);
-
-    if tag_exists == 0 {
+    if !check_ownership(&conn, Tags::COUNT_BY_ID_AND_USER, tag_id, user_id)? {
         return Err(AppError::NotFound(format!(
             "Tag with ID '{}' not found",
             tag_id
@@ -1005,15 +978,7 @@ pub fn remove_tag_from_url(
     let conn = get_conn(pool)?;
 
     // Verify the URL belongs to the user
-    let url_exists: i32 = conn
-        .query_row(
-            "SELECT COUNT(*) FROM urls WHERE id = ?1 AND user_id = ?2",
-            params![url_id, user_id],
-            |row| row.get(0),
-        )
-        .unwrap_or(0);
-
-    if url_exists == 0 {
+    if !check_ownership(&conn, Urls::COUNT_BY_ID_AND_USER, url_id, user_id)? {
         return Err(AppError::NotFound(format!(
             "URL with ID '{}' not found",
             url_id
@@ -1021,13 +986,7 @@ pub fn remove_tag_from_url(
     }
 
     // Verify the tag belongs to the user
-    let tag_exists: i32 = conn
-        .query_row(Tags::COUNT_BY_ID_AND_USER, params![tag_id, user_id], |row| {
-            row.get(0)
-        })
-        .unwrap_or(0);
-
-    if tag_exists == 0 {
+    if !check_ownership(&conn, Tags::COUNT_BY_ID_AND_USER, tag_id, user_id)? {
         return Err(AppError::NotFound(format!(
             "Tag with ID '{}' not found",
             tag_id
@@ -1056,15 +1015,7 @@ pub fn get_tags_for_url(pool: &DbPool, url_id: i64, user_id: i64) -> Result<Vec<
     let conn = get_conn(pool)?;
 
     // Verify the URL belongs to the user
-    let url_exists: i32 = conn
-        .query_row(
-            "SELECT COUNT(*) FROM urls WHERE id = ?1 AND user_id = ?2",
-            params![url_id, user_id],
-            |row| row.get(0),
-        )
-        .unwrap_or(0);
-
-    if url_exists == 0 {
+    if !check_ownership(&conn, Urls::COUNT_BY_ID_AND_USER, url_id, user_id)? {
         return Err(AppError::NotFound(format!(
             "URL with ID '{}' not found",
             url_id
@@ -1074,14 +1025,7 @@ pub fn get_tags_for_url(pool: &DbPool, url_id: i64, user_id: i64) -> Result<Vec<
     let mut stmt = conn.prepare(UrlTags::SELECT_TAGS_BY_URL)?;
 
     let tags = stmt
-        .query_map(params![url_id], |row| {
-            Ok(Tag {
-                id: row.get(0)?,
-                name: row.get(1)?,
-                user_id: row.get(2)?,
-                created_at: row.get(3)?,
-            })
-        })?
+        .query_map(params![url_id], map_tag_row)?
         .collect::<Result<Vec<_>, _>>()?;
 
     Ok(tags)
@@ -1092,13 +1036,7 @@ pub fn get_urls_by_tag(pool: &DbPool, tag_id: i64, user_id: i64) -> Result<Vec<U
     let conn = get_conn(pool)?;
 
     // Verify the tag belongs to the user
-    let tag_exists: i32 = conn
-        .query_row(Tags::COUNT_BY_ID_AND_USER, params![tag_id, user_id], |row| {
-            row.get(0)
-        })
-        .unwrap_or(0);
-
-    if tag_exists == 0 {
+    if !check_ownership(&conn, Tags::COUNT_BY_ID_AND_USER, tag_id, user_id)? {
         return Err(AppError::NotFound(format!(
             "Tag with ID '{}' not found",
             tag_id
@@ -1108,21 +1046,73 @@ pub fn get_urls_by_tag(pool: &DbPool, tag_id: i64, user_id: i64) -> Result<Vec<U
     let mut stmt = conn.prepare(UrlTags::SELECT_URLS_BY_TAG)?;
 
     let urls = stmt
-        .query_map(params![tag_id, user_id], |row| {
-            Ok(Url {
-                id: row.get(0)?,
-                short_code: row.get(1)?,
-                original_url: row.get(2)?,
-                clicks: row.get(3)?,
-                created_at: row.get(4)?,
-                updated_at: row.get(5)?,
-                expires_at: row.get(6)?,
-                user_id: row.get(7)?,
-            })
-        })?
+        .query_map(params![tag_id, user_id], map_url_row)?
         .collect::<Result<Vec<_>, _>>()?;
 
     Ok(urls)
+}
+
+/// Get all URLs with a specific tag, including all tags for each URL
+/// This is an optimized version that avoids N+1 queries by fetching all tags
+/// for the URLs in a single additional query.
+pub fn get_urls_by_tag_with_tags(
+    pool: &DbPool,
+    tag_id: i64,
+    user_id: i64,
+) -> Result<Vec<(Url, Vec<Tag>)>, AppError> {
+    let conn = get_conn(pool)?;
+
+    // Verify the tag belongs to the user
+    if !check_ownership(&conn, Tags::COUNT_BY_ID_AND_USER, tag_id, user_id)? {
+        return Err(AppError::NotFound(format!(
+            "Tag with ID '{}' not found",
+            tag_id
+        )));
+    }
+
+    // First, get all URLs with this tag
+    let mut stmt = conn.prepare(UrlTags::SELECT_URLS_BY_TAG)?;
+    let urls: Vec<Url> = stmt
+        .query_map(params![tag_id, user_id], map_url_row)?
+        .collect::<Result<Vec<_>, _>>()?;
+
+    if urls.is_empty() {
+        return Ok(vec![]);
+    }
+
+    // Build a map of url_id -> tags using a single query
+    let mut url_tags_map: std::collections::HashMap<i64, Vec<Tag>> =
+        std::collections::HashMap::new();
+
+    // Get all tags for all URLs owned by this user
+    let mut tag_stmt = conn.prepare(UrlTags::SELECT_TAGS_FOR_URLS)?;
+    let tag_rows = tag_stmt.query_map(params![user_id], |row| {
+        Ok((
+            row.get::<_, i64>(0)?, // url_id
+            Tag {
+                id: row.get(1)?,
+                name: row.get(2)?,
+                user_id: row.get(3)?,
+                created_at: row.get(4)?,
+            },
+        ))
+    })?;
+
+    for result in tag_rows {
+        let (url_id, tag) = result?;
+        url_tags_map.entry(url_id).or_default().push(tag);
+    }
+
+    // Combine URLs with their tags
+    let result: Vec<(Url, Vec<Tag>)> = urls
+        .into_iter()
+        .map(|url| {
+            let tags = url_tags_map.remove(&url.id).unwrap_or_default();
+            (url, tags)
+        })
+        .collect();
+
+    Ok(result)
 }
 
 #[cfg(test)]
@@ -1758,6 +1748,39 @@ mod tests {
         // Get URLs by "Personal" tag
         let personal_urls = get_urls_by_tag(&pool, other_tag.id, user.id).unwrap();
         assert_eq!(personal_urls.len(), 1);
+    }
+
+    #[test]
+    fn test_get_urls_by_tag_with_tags() {
+        let pool = setup_test_db();
+
+        let (user, _) = register_user(&pool, "test@example.com").unwrap();
+
+        let tag1 = create_tag(&pool, "Work", user.id).unwrap();
+        let tag2 = create_tag(&pool, "Important", user.id).unwrap();
+
+        // Create URL with both tags
+        let request = CreateUrlRequest {
+            url: "https://work-important.com".to_string(),
+            custom_code: Some("multi_tag".to_string()),
+            expires_in_hours: None,
+        };
+        let url = create_url(&pool, &request, 7, user.id).unwrap();
+        add_tag_to_url(&pool, url.id, tag1.id, user.id).unwrap();
+        add_tag_to_url(&pool, url.id, tag2.id, user.id).unwrap();
+
+        // Get URLs by "Work" tag with all tags included
+        let urls_with_tags = get_urls_by_tag_with_tags(&pool, tag1.id, user.id).unwrap();
+        assert_eq!(urls_with_tags.len(), 1);
+
+        let (returned_url, tags) = &urls_with_tags[0];
+        assert_eq!(returned_url.id, url.id);
+        assert_eq!(tags.len(), 2); // Should have both Work and Important tags
+
+        // Verify both tags are present
+        let tag_names: Vec<&str> = tags.iter().map(|t| t.name.as_str()).collect();
+        assert!(tag_names.contains(&"Work"));
+        assert!(tag_names.contains(&"Important"));
     }
 
     #[test]

@@ -139,6 +139,8 @@ impl ApiKeys {
 pub struct Urls;
 
 impl Urls {
+    pub const COUNT_BY_ID_AND_USER: &'static str =
+        "SELECT COUNT(*) FROM urls WHERE id = ?1 AND user_id = ?2";
     pub const INSERT: &'static str =
         "INSERT INTO urls (short_code, original_url, expires_at, user_id) VALUES (?1, ?2, ?3, ?4)";
 
@@ -253,4 +255,13 @@ impl UrlTags {
 
     pub const COUNT_BY_URL_AND_TAG: &'static str =
         "SELECT COUNT(*) FROM url_tags WHERE url_id = ?1 AND tag_id = ?2";
+
+    /// Get all tags for multiple URLs in a single query
+    /// Returns: (url_id, tag_id, tag_name, tag_user_id, tag_created_at)
+    pub const SELECT_TAGS_FOR_URLS: &'static str = "
+        SELECT ut.url_id, t.id, t.name, t.user_id, t.created_at
+        FROM url_tags ut
+        INNER JOIN tags t ON t.id = ut.tag_id
+        WHERE ut.url_id IN (SELECT id FROM urls WHERE user_id = ?1)
+        ORDER BY ut.url_id, t.name ASC";
 }
