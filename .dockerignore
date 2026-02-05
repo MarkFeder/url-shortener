@@ -1,19 +1,21 @@
 # Build artifacts
 target/
+debug/
+release/
 
 # Git
 .git/
 .gitignore
 
-# Environment files
+# Environment files (use docker-compose or -e flags instead)
 .env
 .env.*
 
-# Database files
+# Database files (will be created in container)
 *.db
 *.db-journal
-*.db-shm
 *.db-wal
+*.db-shm
 
 # IDE/Editor
 .idea/
@@ -22,13 +24,18 @@ target/
 *.swo
 *~
 
-# Documentation
+# Documentation (except README)
 *.md
 !README.md
 
-# Misc
+# OS files
 .DS_Store
 Thumbs.db
 
 # Claude
 .claude/
+
+# Misc
+nul
+*.pdf
+*.log

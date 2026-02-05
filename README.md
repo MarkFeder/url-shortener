@@ -18,6 +18,7 @@ A fast, lightweight URL shortener built with **Rust**, **Actix-web**, and **SQLi
 - ⚡ **In-memory caching** - moka-based caching for URL redirects and API key validation
 - 📊 **Prometheus metrics** - monitor performance, cache efficiency, and business metrics
 - 📱 **QR codes** - generate QR codes for short URLs in PNG or SVG format
+- 🐳 **Docker support** - multi-stage Dockerfile and docker-compose for easy deployment
 - 🚀 **Blazing fast** - built with Rust and Actix-web
 - 💾 **SQLite storage** - no database server required
 - ⚡ **WAL mode** - SQLite Write-Ahead Logging for better concurrency
@@ -43,13 +44,17 @@ This project demonstrates:
 14. **QR Code Generation** - Creating QR codes with the qrcode crate
 15. **Query Optimization** - Avoiding N+1 queries with batch loading patterns
 16. **Code Organization** - Row mapping helpers and reusable ownership checks
-17. **Testing** - Unit and integration tests (100+ tests)
+17. **Containerization** - Multi-stage Docker builds and docker-compose
+18. **Testing** - Unit and integration tests (100+ tests)
 
 ## Project Structure
 
 ```
 url-shortener/
 ├── Cargo.toml              # Dependencies and project metadata
+├── Dockerfile              # Multi-stage Docker build
+├── docker-compose.yml      # Docker Compose configuration
+├── .dockerignore           # Docker build exclusions
 ├── .env                    # Environment configuration
 ├── .env.example            # Example configuration
 ├── .gitignore              # Git ignore rules
@@ -772,6 +777,101 @@ Environment variables (set in `.env` file):
 | `API_KEY_CACHE_MAX_CAPACITY` | `1000` | Maximum number of API keys to cache |
 | `METRICS_ENABLED` | `true` | Enable Prometheus metrics endpoint at /metrics |
 
+## Docker
+
+### Quick Start with Docker Compose
+
+The easiest way to run the application:
+
+```bash
+# Build and start the container
+docker-compose up -d
+
+# View logs
+docker-compose logs -f
+
+# Stop the container
+docker-compose down
+
+# Stop and remove data volume
+docker-compose down -v
+```
+
+The application will be available at `http://localhost:8080`.
+
+### Building the Docker Image
+
+```bash
+# Build the image
+docker build -t url-shortener .
+
+# Run the container
+docker run -d \
+  --name url-shortener \
+  -p 8080:8080 \
+  -v url-shortener-data:/app/data \
+  -e BASE_URL=http://localhost:8080 \
+  url-shortener
+```
+
+### Docker Configuration
+
+The Docker image uses these default environment variables:
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `DATABASE_URL` | `/app/data/urls.db` | SQLite database path (inside container) |
+| `HOST` | `0.0.0.0` | Listen on all interfaces |
+| `PORT` | `8080` | Server port |
+| `BASE_URL` | `http://localhost:8080` | Base URL for short links |
+| `RUST_LOG` | `info` | Logging level |
+| `METRICS_ENABLED` | `true` | Enable Prometheus metrics |
+
+Override any variable using `-e` flag or in `docker-compose.yml`.
+
+### Production Deployment
+
+For production, update `BASE_URL` to your domain:
+
+```bash
+docker run -d \
+  --name url-shortener \
+  -p 8080:8080 \
+  -v url-shortener-data:/app/data \
+  -e BASE_URL=https://your-domain.com \
+  -e RUST_LOG=warn \
+  url-shortener
+```
+
+Or modify `docker-compose.yml`:
+
+```yaml
+environment:
+  - BASE_URL=https://your-domain.com
+  - RUST_LOG=warn
+```
+
+### Health Check
+
+The container includes a health check that polls `/health` every 30 seconds:
+
+```bash
+# Check container health status
+docker inspect --format='{{.State.Health.Status}}' url-shortener
+```
+
+### Data Persistence
+
+SQLite data is stored in a Docker volume (`url-shortener-data`) mounted at `/app/data`. To backup:
+
+```bash
+# Backup database
+docker cp url-shortener:/app/data/urls.db ./backup-urls.db
+
+# Restore database
+docker cp ./backup-urls.db url-shortener:/app/data/urls.db
+```
+
 ## Testing with cURL
 
 ```bash
@@ -897,7 +997,7 @@ Here are some ideas for extending this project:
 7. **Web UI** - Add a frontend with HTML templates or SPA
 8. ~~**Caching** - Add Redis or in-memory caching for hot URLs~~ ✅ Done!
 9. ~~**Metrics** - Add Prometheus metrics for monitoring~~ ✅ Done!
-10. **Docker Support** - Add Dockerfile and docker-compose for deployment
+10. ~~**Docker Support** - Add Dockerfile and docker-compose for deployment~~ ✅ Done!
 
 ## Dependencies
 

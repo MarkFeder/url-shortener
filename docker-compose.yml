@@ -1,0 +1,36 @@
+version: '3.8'
+
+services:
+  url-shortener:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: url-shortener
+    ports:
+      - "8080:8080"
+    environment:
+      - DATABASE_URL=/app/data/urls.db
+      - HOST=0.0.0.0
+      - PORT=8080
+      - BASE_URL=http://localhost:8080
+      - SHORT_CODE_LENGTH=7
+      - RUST_LOG=info
+      - URL_CACHE_TTL_SECS=300
+      - URL_CACHE_MAX_CAPACITY=10000
+      - API_KEY_CACHE_TTL_SECS=600
+      - API_KEY_CACHE_MAX_CAPACITY=1000
+      - METRICS_ENABLED=true
+    volumes:
+      # Persist SQLite database
+      - url-shortener-data:/app/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+      start_period: 5s
+
+volumes:
+  url-shortener-data:
+    driver: local
