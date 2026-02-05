@@ -607,6 +607,27 @@ pub fn count_urls(pool: &DbPool, user_id: i64) -> Result<usize, AppError> {
     Ok(count as usize)
 }
 
+/// Search URLs by original URL and/or short code
+///
+/// Both search terms are optional and case-insensitive.
+/// If both are provided, URLs must match both criteria.
+pub fn search_urls(
+    pool: &DbPool,
+    user_id: i64,
+    url_query: Option<&str>,
+    code_query: Option<&str>,
+    limit: u32,
+) -> Result<Vec<Url>, AppError> {
+    let conn = get_conn(pool)?;
+    let mut stmt = conn.prepare(Urls::SEARCH)?;
+
+    let urls = stmt
+        .query_map(params![user_id, url_query, code_query, limit], map_url_row)?
+        .collect::<Result<Vec<_>, _>>()?;
+
+    Ok(urls)
+}
+
 /// Increment click count and log the click within a transaction
 pub fn record_click(
     pool: &DbPool,
@@ -2254,5 +2275,193 @@ mod tests {
         metrics.record_redirect();
         metrics.record_redirect();
         assert_eq!(metrics.redirects_total.get() as u64, 3);
+    }
+
+    // ========================================================================
+    // Search Tests
+    // ========================================================================
+
+    #[test]
+    fn test_search_urls_by_original_url() {
+        let pool = setup_test_db();
+
+        let (user, _) = register_user(&pool, "test@example.com").unwrap();
+
+        // Create URLs with different original URLs
+        let urls_data = [
+            ("https://github.com/rust-lang/rust", "github1"),
+            ("https://github.com/tokio-rs/tokio", "github2"),
+            ("https://docs.rs/actix-web", "docsrs"),
+            ("https://crates.io/crates/serde", "crates"),
+        ];
+
+        for (url, code) in urls_data {
+            let request = CreateUrlRequest {
+                url: url.to_string(),
+                custom_code: Some(code.to_string()),
+                expires_in_hours: None,
+            };
+            create_url(&pool, &request, 7, user.id).unwrap();
+        }
+
+        // Search for "github" in original URL
+        let results = search_urls(&pool, user.id, Some("github"), None, 20).unwrap();
+        assert_eq!(results.len(), 2);
+
+        // Search for "docs.rs" in original URL
+        let results = search_urls(&pool, user.id, Some("docs.rs"), None, 20).unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].short_code, "docsrs");
+
+        // Search for non-existent URL
+        let results = search_urls(&pool, user.id, Some("nonexistent.com"), None, 20).unwrap();
+        assert!(results.is_empty());
+    }
+
+    #[test]
+    fn test_search_urls_by_short_code() {
+        let pool = setup_test_db();
+
+        let (user, _) = register_user(&pool, "test@example.com").unwrap();
+
+        // Create URLs with different codes
+        let urls_data = [
+            ("https://example1.com", "project-alpha"),
+            ("https://example2.com", "project-beta"),
+            ("https://example3.com", "docs-main"),
+            ("https://example4.com", "api-v1"),
+        ];
+
+        for (url, code) in urls_data {
+            let request = CreateUrlRequest {
+                url: url.to_string(),
+                custom_code: Some(code.to_string()),
+                expires_in_hours: None,
+            };
+            create_url(&pool, &request, 7, user.id).unwrap();
+        }
+
+        // Search for "project" in short code
+        let results = search_urls(&pool, user.id, None, Some("project"), 20).unwrap();
+        assert_eq!(results.len(), 2);
+
+        // Search for "api" in short code
+        let results = search_urls(&pool, user.id, None, Some("api"), 20).unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].short_code, "api-v1");
+    }
+
+    #[test]
+    fn test_search_urls_combined() {
+        let pool = setup_test_db();
+
+        let (user, _) = register_user(&pool, "test@example.com").unwrap();
+
+        // Create URLs
+        let urls_data = [
+            ("https://github.com/project", "gh-proj"),
+            ("https://github.com/other", "gh-other"),
+            ("https://gitlab.com/project", "gl-proj"),
+        ];
+
+        for (url, code) in urls_data {
+            let request = CreateUrlRequest {
+                url: url.to_string(),
+                custom_code: Some(code.to_string()),
+                expires_in_hours: None,
+            };
+            create_url(&pool, &request, 7, user.id).unwrap();
+        }
+
+        // Search for github URLs with "proj" in code (should match only gh-proj)
+        let results = search_urls(&pool, user.id, Some("github"), Some("proj"), 20).unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].short_code, "gh-proj");
+    }
+
+    #[test]
+    fn test_search_urls_case_insensitive() {
+        let pool = setup_test_db();
+
+        let (user, _) = register_user(&pool, "test@example.com").unwrap();
+
+        let request = CreateUrlRequest {
+            url: "https://GitHub.COM/Rust-Lang".to_string(),
+            custom_code: Some("RustLang".to_string()),
+            expires_in_hours: None,
+        };
+        create_url(&pool, &request, 7, user.id).unwrap();
+
+        // Search with different cases
+        let results = search_urls(&pool, user.id, Some("github.com"), None, 20).unwrap();
+        assert_eq!(results.len(), 1);
+
+        let results = search_urls(&pool, user.id, Some("GITHUB"), None, 20).unwrap();
+        assert_eq!(results.len(), 1);
+
+        let results = search_urls(&pool, user.id, None, Some("rustlang"), 20).unwrap();
+        assert_eq!(results.len(), 1);
+
+        let results = search_urls(&pool, user.id, None, Some("RUSTLANG"), 20).unwrap();
+        assert_eq!(results.len(), 1);
+    }
+
+    #[test]
+    fn test_search_urls_respects_ownership() {
+        let pool = setup_test_db();
+
+        let (user1, _) = register_user(&pool, "user1@example.com").unwrap();
+        let (user2, _) = register_user(&pool, "user2@example.com").unwrap();
+
+        // Create URL for user1
+        let request = CreateUrlRequest {
+            url: "https://private.example.com".to_string(),
+            custom_code: Some("private1".to_string()),
+            expires_in_hours: None,
+        };
+        create_url(&pool, &request, 7, user1.id).unwrap();
+
+        // Create URL for user2
+        let request = CreateUrlRequest {
+            url: "https://private.example.com".to_string(),
+            custom_code: Some("private2".to_string()),
+            expires_in_hours: None,
+        };
+        create_url(&pool, &request, 7, user2.id).unwrap();
+
+        // User1 searching should only find their URL
+        let results = search_urls(&pool, user1.id, Some("private"), None, 20).unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].short_code, "private1");
+
+        // User2 searching should only find their URL
+        let results = search_urls(&pool, user2.id, Some("private"), None, 20).unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].short_code, "private2");
+    }
+
+    #[test]
+    fn test_search_urls_limit() {
+        let pool = setup_test_db();
+
+        let (user, _) = register_user(&pool, "test@example.com").unwrap();
+
+        // Create 10 URLs
+        for i in 0..10 {
+            let request = CreateUrlRequest {
+                url: format!("https://example{}.com", i),
+                custom_code: Some(format!("test{}", i)),
+                expires_in_hours: None,
+            };
+            create_url(&pool, &request, 7, user.id).unwrap();
+        }
+
+        // Search with limit of 5
+        let results = search_urls(&pool, user.id, Some("example"), None, 5).unwrap();
+        assert_eq!(results.len(), 5);
+
+        // Search with limit of 20 (should return all 10)
+        let results = search_urls(&pool, user.id, Some("example"), None, 20).unwrap();
+        assert_eq!(results.len(), 10);
     }
 }

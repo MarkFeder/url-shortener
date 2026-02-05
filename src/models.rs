@@ -393,6 +393,17 @@ impl Default for ListUrlsQuery {
     }
 }
 
+/// Query parameters for searching URLs
+#[derive(Debug, Clone, Deserialize)]
+pub struct SearchUrlsQuery {
+    /// Search term for original URL (case-insensitive contains)
+    pub q: Option<String>,
+    /// Search term for short code (case-insensitive contains)
+    pub code: Option<String>,
+    /// Maximum number of results (default: 20, max: 100)
+    pub limit: Option<u32>,
+}
+
 /// Query parameters for QR code generation
 #[derive(Debug, Clone, Deserialize)]
 pub struct QrCodeQuery {

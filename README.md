@@ -14,6 +14,7 @@ A fast, lightweight URL shortener built with **Rust**, **Actix-web**, and **SQLi
 - 👤 **URL ownership** - users can only access their own URLs
 - 📦 **Bulk operations** - create or delete up to 100 URLs in a single request
 - 🏷️ **Tags/Categories** - organize URLs with user-defined tags
+- 🔍 **Search** - find URLs by original URL or short code
 - 🛡️ **Rate limiting** - 60 requests/minute per IP to prevent abuse
 - ⚡ **In-memory caching** - moka-based caching for URL redirects and API key validation
 - 📊 **Prometheus metrics** - monitor performance, cache efficiency, and business metrics
@@ -269,6 +270,56 @@ X-API-Key: usk_your_key_here
 ```
 
 > Note: Only returns URLs owned by the authenticated user.
+
+---
+
+### Search URLs (Authenticated)
+
+Search your URLs by original URL and/or short code (case-insensitive partial match).
+
+```bash
+# Search by original URL
+GET /api/urls/search?q=github
+X-API-Key: usk_your_key_here
+
+# Search by short code
+GET /api/urls/search?code=proj
+X-API-Key: usk_your_key_here
+
+# Search by both (must match both criteria)
+GET /api/urls/search?q=github&code=proj
+X-API-Key: usk_your_key_here
+
+# With custom limit
+GET /api/urls/search?q=example&limit=50
+X-API-Key: usk_your_key_here
+```
+
+**Query Parameters:**
+- `q`: Search term for original URL (partial match, case-insensitive)
+- `code`: Search term for short code (partial match, case-insensitive)
+- `limit`: Maximum results (default: 20, max: 100)
+
+> At least one of `q` or `code` is required.
+
+**Response (200 OK):**
+```json
+{
+    "total": 2,
+    "urls": [
+        {
+            "id": 1,
+            "short_code": "gh-proj",
+            "short_url": "http://localhost:8080/gh-proj",
+            "original_url": "https://github.com/myproject",
+            "clicks": 42,
+            "created_at": "2024-01-01 12:00:00",
+            "updated_at": "2024-01-15 08:30:00",
+            "expires_at": null
+        }
+    ]
+}
+```
 
 ---
 
@@ -902,6 +953,18 @@ curl -X POST http://localhost:8080/api/shorten \
 curl -H "X-API-Key: YOUR_API_KEY" \
   http://localhost:8080/api/urls
 
+# Search URLs by original URL
+curl -H "X-API-Key: YOUR_API_KEY" \
+  "http://localhost:8080/api/urls/search?q=github"
+
+# Search URLs by short code
+curl -H "X-API-Key: YOUR_API_KEY" \
+  "http://localhost:8080/api/urls/search?code=docs"
+
+# Search with both filters
+curl -H "X-API-Key: YOUR_API_KEY" \
+  "http://localhost:8080/api/urls/search?q=example&code=proj"
+
 # Get URL details
 curl -H "X-API-Key: YOUR_API_KEY" \
   http://localhost:8080/api/urls/1
@@ -992,7 +1055,7 @@ Here are some ideas for extending this project:
 2. ~~**QR Codes** - Generate QR codes for short URLs~~ ✅ Done!
 3. **Custom Domains** - Support multiple base URLs
 4. ~~**Bulk Operations** - Create/delete multiple URLs at once~~ ✅ Done!
-5. **Search** - Search URLs by original URL or code
+5. ~~**Search** - Search URLs by original URL or code~~ ✅ Done!
 6. ~~**Tags/Categories** - Organize URLs with tags~~ ✅ Done!
 7. **Web UI** - Add a frontend with HTML templates or SPA
 8. ~~**Caching** - Add Redis or in-memory caching for hot URLs~~ ✅ Done!

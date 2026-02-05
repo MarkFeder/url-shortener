@@ -15,8 +15,8 @@ use crate::models::{
     AddTagToUrlRequest, ApiKeyListResponse, ApiKeyResponse, BulkCreateUrlRequest,
     BulkDeleteUrlRequest, BulkOperationStatus, CreateApiKeyRequest, CreateApiKeyResponse,
     CreateTagRequest, CreateUrlRequest, CreateUrlResponse, ListUrlsQuery, MessageResponse,
-    QrCodeQuery, RegisterRequest, RegisterResponse, TagListResponse, TagResponse,
-    UrlListResponse, UrlResponse, UrlWithTagsResponse, UrlsByTagResponse,
+    QrCodeQuery, RegisterRequest, RegisterResponse, SearchUrlsQuery, TagListResponse,
+    TagResponse, UrlListResponse, UrlResponse, UrlWithTagsResponse, UrlsByTagResponse,
 };
 use crate::qr::{self, QrFormat, QrOptions};
 use crate::services;
@@ -45,6 +45,7 @@ pub fn configure_routes(cfg: &mut web::ServiceConfig) {
             .service(bulk_delete_urls)
             // URL routes (all protected)
             .service(create_short_url)
+            .service(search_urls)
             .service(list_urls)
             .service(get_url_by_id)
             .service(delete_url_by_id)
@@ -252,6 +253,59 @@ async fn create_short_url(
     };
 
     Ok(HttpResponse::Created().json(response))
+}
+
+/// Search URLs by original URL and/or short code
+///
+/// # Query Parameters
+/// - `q`: Search term for original URL (case-insensitive, partial match)
+/// - `code`: Search term for short code (case-insensitive, partial match)
+/// - `limit`: Maximum results (default: 20, max: 100)
+///
+/// At least one of `q` or `code` must be provided.
+///
+/// # Response
+/// ```json
+/// {
+///     "total": 5,
+///     "urls": [...]
+/// }
+/// ```
+#[get("/urls/search")]
+async fn search_urls(
+    user: AuthenticatedUser,
+    pool: web::Data<DbPool>,
+    config: web::Data<Config>,
+    query: web::Query<SearchUrlsQuery>,
+) -> Result<HttpResponse, AppError> {
+    // Validate that at least one search parameter is provided
+    if query.q.is_none() && query.code.is_none() {
+        return Err(AppError::ValidationError(
+            "At least one search parameter (q or code) is required".into(),
+        ));
+    }
+
+    let limit = query.limit.unwrap_or(20).min(100);
+
+    let urls = services::search_urls(
+        &pool,
+        user.user_id,
+        query.q.as_deref(),
+        query.code.as_deref(),
+        limit,
+    )?;
+
+    let url_responses: Vec<UrlResponse> = urls
+        .into_iter()
+        .map(|u| UrlResponse::from_url(u, &config.base_url))
+        .collect();
+
+    let response = UrlListResponse {
+        total: url_responses.len(),
+        urls: url_responses,
+    };
+
+    Ok(HttpResponse::Ok().json(response))
 }
 
 /// List all URLs for the authenticated user with pagination
@@ -1521,5 +1575,199 @@ mod tests {
 
         let resp: actix_web::dev::ServiceResponse = test::call_service(&app, req).await;
         assert_eq!(resp.status(), 404);
+    }
+
+    // ========================================================================
+    // Search Handler Tests
+    // ========================================================================
+
+    #[actix_rt::test]
+    async fn test_search_urls_by_original_url() {
+        let pool = setup_test_pool();
+
+        // Register a user and create URLs
+        let (user, api_key) = services::register_user(&pool, "test@example.com").unwrap();
+
+        let urls_data = [
+            ("https://github.com/rust", "gh1"),
+            ("https://github.com/tokio", "gh2"),
+            ("https://docs.rs/actix", "docs"),
+        ];
+
+        for (url, code) in urls_data {
+            let request = CreateUrlRequest {
+                url: url.to_string(),
+                custom_code: Some(code.to_string()),
+                expires_in_hours: None,
+            };
+            services::create_url(&pool, &request, 7, user.id).unwrap();
+        }
+
+        let app = setup_test_app(pool).await;
+
+        // Search for "github"
+        let req = test::TestRequest::get()
+            .uri("/api/urls/search?q=github")
+            .insert_header(("X-API-Key", api_key))
+            .to_request();
+
+        let resp: actix_web::dev::ServiceResponse = test::call_service(&app, req).await;
+        assert!(resp.status().is_success());
+
+        let body: UrlListResponse = test::read_body_json(resp).await;
+        assert_eq!(body.total, 2);
+    }
+
+    #[actix_rt::test]
+    async fn test_search_urls_by_short_code() {
+        let pool = setup_test_pool();
+
+        let (user, api_key) = services::register_user(&pool, "test@example.com").unwrap();
+
+        let urls_data = [
+            ("https://example1.com", "proj-alpha"),
+            ("https://example2.com", "proj-beta"),
+            ("https://example3.com", "docs-main"),
+        ];
+
+        for (url, code) in urls_data {
+            let request = CreateUrlRequest {
+                url: url.to_string(),
+                custom_code: Some(code.to_string()),
+                expires_in_hours: None,
+            };
+            services::create_url(&pool, &request, 7, user.id).unwrap();
+        }
+
+        let app = setup_test_app(pool).await;
+
+        // Search for "proj" in code
+        let req = test::TestRequest::get()
+            .uri("/api/urls/search?code=proj")
+            .insert_header(("X-API-Key", api_key))
+            .to_request();
+
+        let resp: actix_web::dev::ServiceResponse = test::call_service(&app, req).await;
+        assert!(resp.status().is_success());
+
+        let body: UrlListResponse = test::read_body_json(resp).await;
+        assert_eq!(body.total, 2);
+    }
+
+    #[actix_rt::test]
+    async fn test_search_urls_combined_filters() {
+        let pool = setup_test_pool();
+
+        let (user, api_key) = services::register_user(&pool, "test@example.com").unwrap();
+
+        let urls_data = [
+            ("https://github.com/project", "gh-proj"),
+            ("https://github.com/other", "gh-other"),
+            ("https://gitlab.com/project", "gl-proj"),
+        ];
+
+        for (url, code) in urls_data {
+            let request = CreateUrlRequest {
+                url: url.to_string(),
+                custom_code: Some(code.to_string()),
+                expires_in_hours: None,
+            };
+            services::create_url(&pool, &request, 7, user.id).unwrap();
+        }
+
+        let app = setup_test_app(pool).await;
+
+        // Search for github URLs with "proj" in code
+        let req = test::TestRequest::get()
+            .uri("/api/urls/search?q=github&code=proj")
+            .insert_header(("X-API-Key", api_key))
+            .to_request();
+
+        let resp: actix_web::dev::ServiceResponse = test::call_service(&app, req).await;
+        assert!(resp.status().is_success());
+
+        let body: UrlListResponse = test::read_body_json(resp).await;
+        assert_eq!(body.total, 1);
+        assert_eq!(body.urls[0].short_code, "gh-proj");
+    }
+
+    #[actix_rt::test]
+    async fn test_search_urls_requires_parameter() {
+        let pool = setup_test_pool();
+
+        let (_, api_key) = services::register_user(&pool, "test@example.com").unwrap();
+
+        let app = setup_test_app(pool).await;
+
+        // Search without any parameters should fail
+        let req = test::TestRequest::get()
+            .uri("/api/urls/search")
+            .insert_header(("X-API-Key", api_key))
+            .to_request();
+
+        let resp: actix_web::dev::ServiceResponse = test::call_service(&app, req).await;
+        assert_eq!(resp.status(), 400);
+    }
+
+    #[actix_rt::test]
+    async fn test_search_urls_requires_auth() {
+        let pool = setup_test_pool();
+        let app = setup_test_app(pool).await;
+
+        // Search without auth should fail
+        let req = test::TestRequest::get()
+            .uri("/api/urls/search?q=test")
+            .to_request();
+
+        let resp: actix_web::dev::ServiceResponse = test::call_service(&app, req).await;
+        assert_eq!(resp.status(), 401);
+    }
+
+    #[actix_rt::test]
+    async fn test_search_urls_respects_ownership() {
+        let pool = setup_test_pool();
+
+        let (user1, api_key1) = services::register_user(&pool, "user1@example.com").unwrap();
+        let (user2, api_key2) = services::register_user(&pool, "user2@example.com").unwrap();
+
+        // Create URL for user1
+        let request = CreateUrlRequest {
+            url: "https://secret.example.com".to_string(),
+            custom_code: Some("secret1".to_string()),
+            expires_in_hours: None,
+        };
+        services::create_url(&pool, &request, 7, user1.id).unwrap();
+
+        // Create URL for user2
+        let request = CreateUrlRequest {
+            url: "https://secret.example.com".to_string(),
+            custom_code: Some("secret2".to_string()),
+            expires_in_hours: None,
+        };
+        services::create_url(&pool, &request, 7, user2.id).unwrap();
+
+        let app = setup_test_app(pool).await;
+
+        // User1 searches - should only see their URL
+        let req = test::TestRequest::get()
+            .uri("/api/urls/search?q=secret")
+            .insert_header(("X-API-Key", api_key1))
+            .to_request();
+
+        let resp: actix_web::dev::ServiceResponse = test::call_service(&app, req).await;
+        let body: UrlListResponse = test::read_body_json(resp).await;
+        assert_eq!(body.total, 1);
+        assert_eq!(body.urls[0].short_code, "secret1");
+
+        // User2 searches - should only see their URL
+        let req = test::TestRequest::get()
+            .uri("/api/urls/search?q=secret")
+            .insert_header(("X-API-Key", api_key2))
+            .to_request();
+
+        let resp: actix_web::dev::ServiceResponse = test::call_service(&app, req).await;
+        let body: UrlListResponse = test::read_body_json(resp).await;
+        assert_eq!(body.total, 1);
+        assert_eq!(body.urls[0].short_code, "secret2");
     }
 }

@@ -182,6 +182,17 @@ impl Urls {
             sort_order
         )
     }
+
+    /// Search URLs by original URL and/or short code (case-insensitive)
+    /// Parameters: ?1 = user_id, ?2 = url_pattern, ?3 = code_pattern, ?4 = limit
+    pub const SEARCH: &'static str = "
+        SELECT id, short_code, original_url, clicks, created_at, updated_at, expires_at, user_id
+        FROM urls
+        WHERE user_id = ?1
+          AND (?2 IS NULL OR original_url LIKE '%' || ?2 || '%' COLLATE NOCASE)
+          AND (?3 IS NULL OR short_code LIKE '%' || ?3 || '%' COLLATE NOCASE)
+        ORDER BY created_at DESC
+        LIMIT ?4";
 }
 
 /// Click log queries for analytics.
