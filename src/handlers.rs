@@ -10,6 +10,7 @@ use crate::cache::AppCache;
 use crate::config::Config;
 use crate::db::DbPool;
 use crate::errors::AppError;
+use crate::metrics::AppMetrics;
 use crate::models::{
     AddTagToUrlRequest, ApiKeyListResponse, ApiKeyResponse, BulkCreateUrlRequest,
     BulkDeleteUrlRequest, BulkOperationStatus, CreateApiKeyRequest, CreateApiKeyResponse,
@@ -220,6 +221,7 @@ async fn create_short_url(
     user: AuthenticatedUser,
     pool: web::Data<DbPool>,
     config: web::Data<Config>,
+    metrics: Option<web::Data<AppMetrics>>,
     body: web::Json<CreateUrlRequest>,
 ) -> Result<HttpResponse, AppError> {
     // Validate input
@@ -230,8 +232,14 @@ async fn create_short_url(
     url::Url::parse(&body.url)
         .map_err(|_| AppError::ValidationError("Invalid URL format".into()))?;
 
-    // Create the short URL
-    let url = services::create_url(&pool, &body, config.short_code_length, user.user_id)?;
+    // Create the short URL with metrics
+    let url = services::create_url_with_metrics(
+        &pool,
+        &body,
+        config.short_code_length,
+        user.user_id,
+        metrics.as_ref().map(|m| m.as_ref()),
+    )?;
 
     let response = CreateUrlResponse {
         short_code: url.short_code.clone(),
@@ -675,6 +683,7 @@ async fn get_urls_by_tag(
 async fn redirect_to_url(
     pool: web::Data<DbPool>,
     cache: web::Data<AppCache>,
+    metrics: Option<web::Data<AppMetrics>>,
     path: web::Path<String>,
     req: HttpRequest,
 ) -> Result<HttpResponse, AppError> {
@@ -685,7 +694,12 @@ async fn redirect_to_url(
         return Err(AppError::NotFound("Resource not found".into()));
     }
 
-    let url = services::get_url_by_code_cached(&pool, &cache, &short_code)?;
+    let url = services::get_url_by_code_cached_with_metrics(
+        &pool,
+        &cache,
+        &short_code,
+        metrics.as_ref().map(|m| m.as_ref()),
+    )?;
 
     // Extract request metadata for analytics
     let ip_address = req
@@ -713,6 +727,11 @@ async fn redirect_to_url(
         user_agent.as_deref(),
         referer.as_deref(),
     );
+
+    // Record redirect metric
+    if let Some(ref m) = metrics {
+        m.record_redirect();
+    }
 
     log::info!(
         "Redirecting {} -> {} (clicks: {})",

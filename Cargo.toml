@@ -35,6 +35,8 @@ regex = "1"              # Regular expressions
 sha2 = "0.10"            # SHA-256 hashing for API keys
 rand = "0.8"             # Random generation for API keys
 moka = { version = "0.12", features = ["sync"] }  # In-memory caching
+actix-web-prom = "0.9"   # Prometheus metrics middleware
+prometheus = "0.13"       # Prometheus metrics
 
 [dev-dependencies]
 actix-rt = "2"

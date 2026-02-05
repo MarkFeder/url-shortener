@@ -8,6 +8,7 @@ use std::future::{ready, Ready};
 use crate::cache::AppCache;
 use crate::db::DbPool;
 use crate::errors::AppError;
+use crate::metrics::AppMetrics;
 use crate::services;
 
 /// Authenticated user extractor for protecting endpoints.
@@ -40,6 +41,9 @@ impl FromRequest for AuthenticatedUser {
         // Get the cache from app data (optional - falls back to non-cached if unavailable)
         let cache = req.app_data::<web::Data<AppCache>>();
 
+        // Get metrics from app data (optional)
+        let metrics = req.app_data::<web::Data<AppMetrics>>();
+
         // Try to extract the API key from headers
         let provided_key = match extract_api_key(req) {
             Some(key) => key.to_string(),
@@ -50,9 +54,14 @@ impl FromRequest for AuthenticatedUser {
             }
         };
 
-        // Validate the API key (using cache if available)
+        // Validate the API key (using cache and metrics if available)
         let result = if let Some(cache) = cache {
-            services::validate_api_key_cached(pool, cache, &provided_key)
+            services::validate_api_key_cached_with_metrics(
+                pool,
+                cache,
+                &provided_key,
+                metrics.map(|m| m.as_ref()),
+            )
         } else {
             services::validate_api_key(pool, &provided_key)
         };

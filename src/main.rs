@@ -16,12 +16,14 @@ mod config;
 mod db;
 mod errors;
 mod handlers;
+mod metrics;
 mod models;
 mod queries;
 mod services;
 
 use actix_governor::{Governor, GovernorConfigBuilder};
 use actix_web::{middleware::Logger, web, App, HttpServer};
+use actix_web_prom::PrometheusMetricsBuilder;
 use log::info;
 
 #[actix_web::main]
@@ -87,23 +89,65 @@ async fn main() -> std::io::Result<()> {
     info!("Rate limiting enabled: 60 requests/minute per IP");
     info!("Per-user API key authentication enabled");
 
-    // Start HTTP server
-    HttpServer::new(move || {
-        App::new()
-            // Add database pool to app state
-            .app_data(web::Data::new(pool.clone()))
-            // Add base URL to app state
-            .app_data(web::Data::new(config.clone()))
-            // Add cache to app state
-            .app_data(web::Data::new(app_cache.clone()))
-            // Enable rate limiting middleware
-            .wrap(Governor::new(&governor_conf))
-            // Enable logger middleware
-            .wrap(Logger::default())
-            // Configure routes
-            .configure(handlers::configure_routes)
-    })
-    .bind(&bind_addr)?
-    .run()
-    .await
+    // Initialize Prometheus metrics if enabled
+    let (prometheus_metrics, app_metrics) = if config.metrics_enabled {
+        let prometheus = PrometheusMetricsBuilder::new("url_shortener")
+            .endpoint("/metrics")
+            .build()
+            .expect("Failed to create Prometheus metrics");
+
+        let app_metrics = metrics::AppMetrics::new(&prometheus.registry)
+            .expect("Failed to register custom metrics");
+
+        info!("Prometheus metrics enabled at /metrics");
+        (Some(prometheus), Some(app_metrics))
+    } else {
+        info!("Prometheus metrics disabled");
+        (None, None)
+    };
+
+    // Start HTTP server based on whether metrics are enabled
+    if let (Some(prometheus_metrics), Some(app_metrics)) = (prometheus_metrics, app_metrics) {
+        HttpServer::new(move || {
+            App::new()
+                // Add database pool to app state
+                .app_data(web::Data::new(pool.clone()))
+                // Add base URL to app state
+                .app_data(web::Data::new(config.clone()))
+                // Add cache to app state
+                .app_data(web::Data::new(app_cache.clone()))
+                // Add metrics to app state
+                .app_data(web::Data::new(app_metrics.clone()))
+                // Add Prometheus middleware
+                .wrap(prometheus_metrics.clone())
+                // Enable rate limiting middleware
+                .wrap(Governor::new(&governor_conf))
+                // Enable logger middleware
+                .wrap(Logger::default())
+                // Configure routes
+                .configure(handlers::configure_routes)
+        })
+        .bind(&bind_addr)?
+        .run()
+        .await
+    } else {
+        HttpServer::new(move || {
+            App::new()
+                // Add database pool to app state
+                .app_data(web::Data::new(pool.clone()))
+                // Add base URL to app state
+                .app_data(web::Data::new(config.clone()))
+                // Add cache to app state
+                .app_data(web::Data::new(app_cache.clone()))
+                // Enable rate limiting middleware
+                .wrap(Governor::new(&governor_conf))
+                // Enable logger middleware
+                .wrap(Logger::default())
+                // Configure routes
+                .configure(handlers::configure_routes)
+        })
+        .bind(&bind_addr)?
+        .run()
+        .await
+    }
 }

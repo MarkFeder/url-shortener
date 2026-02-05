@@ -25,6 +25,8 @@ pub struct Config {
     pub api_key_cache_ttl_secs: u64,
     /// API key cache maximum capacity
     pub api_key_cache_max_capacity: u64,
+    /// Enable Prometheus metrics endpoint
+    pub metrics_enabled: bool,
 }
 
 impl Config {
@@ -40,6 +42,7 @@ impl Config {
     /// - `URL_CACHE_MAX_CAPACITY`: URL cache max capacity (default: 10000)
     /// - `API_KEY_CACHE_TTL_SECS`: API key cache TTL in seconds (default: 600)
     /// - `API_KEY_CACHE_MAX_CAPACITY`: API key cache max capacity (default: 1000)
+    /// - `METRICS_ENABLED`: Enable Prometheus metrics endpoint (default: true)
     pub fn from_env() -> Self {
         let host = env::var("HOST").unwrap_or_else(|_| "127.0.0.1".to_string());
         let port: u16 = env::var("PORT")
@@ -75,6 +78,10 @@ impl Config {
                 .unwrap_or_else(|_| "1000".to_string())
                 .parse()
                 .expect("API_KEY_CACHE_MAX_CAPACITY must be a valid number"),
+            metrics_enabled: env::var("METRICS_ENABLED")
+                .unwrap_or_else(|_| "true".to_string())
+                .parse()
+                .unwrap_or(true),
         }
     }
 }
@@ -91,6 +98,7 @@ impl Default for Config {
             url_cache_max_capacity: 10_000,
             api_key_cache_ttl_secs: 600,
             api_key_cache_max_capacity: 1_000,
+            metrics_enabled: true,
         }
     }
 }

@@ -12,6 +12,7 @@ use sha2::{Digest, Sha256};
 use crate::cache::{AppCache, CachedApiKey, CachedUrl};
 use crate::db::{get_conn, DbPool};
 use crate::errors::AppError;
+use crate::metrics::AppMetrics;
 use crate::models::{
     ApiKeyRecord, BulkCreateItemResult, BulkCreateUrlItem, BulkCreateUrlResponse,
     BulkDeleteItemResult, BulkDeleteUrlResponse, BulkItemError, BulkOperationStatus, ClickLog,
@@ -189,25 +190,58 @@ pub fn validate_api_key_cached(
     cache: &AppCache,
     api_key: &str,
 ) -> Result<(i64, i64), AppError> {
+    validate_api_key_cached_with_metrics(pool, cache, api_key, None)
+}
+
+/// Validate an API key with caching and optional metrics recording
+///
+/// Checks the cache first, then falls back to the database on cache miss.
+/// Records cache hits/misses and validation results to metrics if provided.
+pub fn validate_api_key_cached_with_metrics(
+    pool: &DbPool,
+    cache: &AppCache,
+    api_key: &str,
+    metrics: Option<&AppMetrics>,
+) -> Result<(i64, i64), AppError> {
     let key_hash = hash_api_key(api_key);
 
     // Check cache first
     if let Some(cached) = cache.get_api_key(&key_hash) {
         log::debug!("Cache hit for API key");
+        if let Some(m) = metrics {
+            m.record_cache_hit("api_key");
+            m.record_api_key_validation("success");
+        }
         return Ok((cached.user_id, cached.key_id));
     }
 
     // Cache miss - validate against database
     log::debug!("Cache miss for API key, querying database");
-    let (user_id, key_id) = validate_api_key(pool, api_key)?;
+    if let Some(m) = metrics {
+        m.record_cache_miss("api_key");
+    }
 
-    // Store in cache
-    cache.insert_api_key(
-        &key_hash,
-        CachedApiKey { user_id, key_id },
-    );
+    match validate_api_key(pool, api_key) {
+        Ok((user_id, key_id)) => {
+            // Store in cache
+            cache.insert_api_key(
+                &key_hash,
+                CachedApiKey { user_id, key_id },
+            );
 
-    Ok((user_id, key_id))
+            if let Some(m) = metrics {
+                m.record_api_key_validation("success");
+            }
+
+            Ok((user_id, key_id))
+        }
+        Err(e) => {
+            if let Some(m) = metrics {
+                m.record_api_key_validation("invalid");
+            }
+            Err(e)
+        }
+    }
 }
 
 /// List all API keys for a user
@@ -302,6 +336,17 @@ pub fn create_url(
     code_length: usize,
     user_id: i64,
 ) -> Result<Url, AppError> {
+    create_url_with_metrics(pool, request, code_length, user_id, None)
+}
+
+/// Create a new shortened URL with optional metrics recording
+pub fn create_url_with_metrics(
+    pool: &DbPool,
+    request: &CreateUrlRequest,
+    code_length: usize,
+    user_id: i64,
+    metrics: Option<&AppMetrics>,
+) -> Result<Url, AppError> {
     let conn = get_conn(pool)?;
 
     // Use custom code or generate one
@@ -353,6 +398,11 @@ pub fn create_url(
         request.url,
         user_id
     );
+
+    // Record metric
+    if let Some(m) = metrics {
+        m.record_url_created();
+    }
 
     Ok(url)
 }
@@ -412,6 +462,20 @@ pub fn get_url_by_code_cached(
     cache: &AppCache,
     short_code: &str,
 ) -> Result<Url, AppError> {
+    get_url_by_code_cached_with_metrics(pool, cache, short_code, None)
+}
+
+/// Get a URL by its short code with caching and optional metrics recording
+///
+/// Checks the cache first, then falls back to the database on cache miss.
+/// Also checks expiration on cache hits and invalidates expired entries.
+/// Records cache hits/misses to metrics if provided.
+pub fn get_url_by_code_cached_with_metrics(
+    pool: &DbPool,
+    cache: &AppCache,
+    short_code: &str,
+    metrics: Option<&AppMetrics>,
+) -> Result<Url, AppError> {
     // Check cache first
     if let Some(cached) = cache.get_url(short_code) {
         // Check if cached URL has expired
@@ -430,6 +494,9 @@ pub fn get_url_by_code_cached(
         }
 
         log::debug!("Cache hit for short code: {}", short_code);
+        if let Some(m) = metrics {
+            m.record_cache_hit("url");
+        }
 
         // Return a minimal Url struct from cached data
         // Note: clicks field will be 0 since we don't cache it (it changes frequently)
@@ -447,6 +514,10 @@ pub fn get_url_by_code_cached(
 
     // Cache miss - query database
     log::debug!("Cache miss for short code: {}, querying database", short_code);
+    if let Some(m) = metrics {
+        m.record_cache_miss("url");
+    }
+
     let url = get_url_by_code(pool, short_code)?;
 
     // Store in cache
@@ -2029,5 +2100,136 @@ mod tests {
         // Key should no longer work
         let result = validate_api_key(&pool, &api_key);
         assert!(matches!(result, Err(AppError::Unauthorized(_))));
+    }
+
+    // ========================================================================
+    // Metrics Integration Tests
+    // ========================================================================
+
+    #[test]
+    fn test_create_url_with_metrics() {
+        let pool = setup_test_db();
+        let registry = prometheus::Registry::new();
+        let metrics = AppMetrics::new(&registry).unwrap();
+
+        let (user, _) = register_user(&pool, "test@example.com").unwrap();
+
+        let request = CreateUrlRequest {
+            url: "https://example.com".to_string(),
+            custom_code: Some("metrics_test".to_string()),
+            expires_in_hours: None,
+        };
+
+        // Create URL with metrics
+        let url = create_url_with_metrics(&pool, &request, 7, user.id, Some(&metrics)).unwrap();
+        assert_eq!(url.short_code, "metrics_test");
+
+        // Verify metric was incremented
+        assert_eq!(metrics.urls_created_total.get() as u64, 1);
+
+        // Create another URL
+        let request2 = CreateUrlRequest {
+            url: "https://example2.com".to_string(),
+            custom_code: Some("metrics_test2".to_string()),
+            expires_in_hours: None,
+        };
+        create_url_with_metrics(&pool, &request2, 7, user.id, Some(&metrics)).unwrap();
+
+        assert_eq!(metrics.urls_created_total.get() as u64, 2);
+    }
+
+    #[test]
+    fn test_get_url_cached_with_metrics() {
+        let pool = setup_test_db();
+        let cache = AppCache::default();
+        let registry = prometheus::Registry::new();
+        let metrics = AppMetrics::new(&registry).unwrap();
+
+        let (user, _) = register_user(&pool, "test@example.com").unwrap();
+
+        let request = CreateUrlRequest {
+            url: "https://example.com".to_string(),
+            custom_code: Some("cache_metrics".to_string()),
+            expires_in_hours: None,
+        };
+        create_url(&pool, &request, 7, user.id).unwrap();
+
+        // First call - cache miss
+        get_url_by_code_cached_with_metrics(&pool, &cache, "cache_metrics", Some(&metrics)).unwrap();
+        assert_eq!(
+            metrics.cache_misses_total.with_label_values(&["url"]).get() as u64,
+            1
+        );
+        assert_eq!(
+            metrics.cache_hits_total.with_label_values(&["url"]).get() as u64,
+            0
+        );
+
+        // Second call - cache hit
+        get_url_by_code_cached_with_metrics(&pool, &cache, "cache_metrics", Some(&metrics)).unwrap();
+        assert_eq!(
+            metrics.cache_misses_total.with_label_values(&["url"]).get() as u64,
+            1
+        );
+        assert_eq!(
+            metrics.cache_hits_total.with_label_values(&["url"]).get() as u64,
+            1
+        );
+    }
+
+    #[test]
+    fn test_validate_api_key_cached_with_metrics() {
+        let pool = setup_test_db();
+        let cache = AppCache::default();
+        let registry = prometheus::Registry::new();
+        let metrics = AppMetrics::new(&registry).unwrap();
+
+        let (user, api_key) = register_user(&pool, "test@example.com").unwrap();
+
+        // First call - cache miss, success
+        let (user_id, _) = validate_api_key_cached_with_metrics(&pool, &cache, &api_key, Some(&metrics)).unwrap();
+        assert_eq!(user_id, user.id);
+        assert_eq!(
+            metrics.cache_misses_total.with_label_values(&["api_key"]).get() as u64,
+            1
+        );
+        assert_eq!(
+            metrics.api_key_validations_total.with_label_values(&["success"]).get() as u64,
+            1
+        );
+
+        // Second call - cache hit, success
+        validate_api_key_cached_with_metrics(&pool, &cache, &api_key, Some(&metrics)).unwrap();
+        assert_eq!(
+            metrics.cache_hits_total.with_label_values(&["api_key"]).get() as u64,
+            1
+        );
+        assert_eq!(
+            metrics.api_key_validations_total.with_label_values(&["success"]).get() as u64,
+            2
+        );
+
+        // Invalid key - should record invalid
+        let result = validate_api_key_cached_with_metrics(&pool, &cache, "usk_invalid", Some(&metrics));
+        assert!(result.is_err());
+        assert_eq!(
+            metrics.api_key_validations_total.with_label_values(&["invalid"]).get() as u64,
+            1
+        );
+    }
+
+    #[test]
+    fn test_metrics_record_redirect() {
+        let registry = prometheus::Registry::new();
+        let metrics = AppMetrics::new(&registry).unwrap();
+
+        assert_eq!(metrics.redirects_total.get() as u64, 0);
+
+        metrics.record_redirect();
+        assert_eq!(metrics.redirects_total.get() as u64, 1);
+
+        metrics.record_redirect();
+        metrics.record_redirect();
+        assert_eq!(metrics.redirects_total.get() as u64, 3);
     }
 }
