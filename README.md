@@ -46,7 +46,9 @@ This project demonstrates:
 15. **Query Optimization** - Avoiding N+1 queries with batch loading patterns
 16. **Code Organization** - Row mapping helpers and reusable ownership checks
 17. **Containerization** - Multi-stage Docker builds and docker-compose
-18. **Testing** - Unit and integration tests (100+ tests)
+18. **Testing** - Unit and integration tests (127+ tests) with shared test utilities
+19. **Constants Management** - Centralized magic numbers and configuration defaults
+20. **Error Constructors** - Domain-specific error factory methods for cleaner code
 
 ## Project Structure
 
@@ -63,6 +65,7 @@ url-shortener/
 └── src/
     ├── main.rs             # Application entry point and server setup
     ├── config.rs           # Configuration management
+    ├── constants.rs        # Centralized application constants
     ├── db.rs               # Database pool, WAL configuration, and migrations
     ├── cache.rs            # In-memory caching for URLs and API keys
     ├── metrics.rs          # Prometheus metrics for monitoring
@@ -72,7 +75,8 @@ url-shortener/
     ├── queries.rs          # SQL query constants
     ├── services.rs         # Business logic layer
     ├── handlers.rs         # HTTP route handlers
-    └── auth.rs             # API key authentication extractor
+    ├── auth.rs             # API key authentication extractor
+    └── test_utils.rs       # Shared test infrastructure (test-only)
 ```
 
 ## Prerequisites

@@ -5,6 +5,8 @@
 use serde::{Deserialize, Serialize};
 use validator::Validate;
 
+use crate::constants::{DEFAULT_PAGE_LIMIT, DEFAULT_SORT_ORDER};
+
 // ============================================================================
 // Database Models
 // ============================================================================
@@ -387,8 +389,8 @@ impl Default for ListUrlsQuery {
     fn default() -> Self {
         Self {
             page: Some(1),
-            limit: Some(20),
-            sort: Some("desc".to_string()),
+            limit: Some(DEFAULT_PAGE_LIMIT),
+            sort: Some(DEFAULT_SORT_ORDER.to_string()),
         }
     }
 }
