@@ -16,6 +16,7 @@ A fast, lightweight URL shortener built with **Rust**, **Actix-web**, and **SQLi
 - 🏷️ **Tags/Categories** - organize URLs with user-defined tags
 - 🛡️ **Rate limiting** - 60 requests/minute per IP to prevent abuse
 - ⚡ **In-memory caching** - moka-based caching for URL redirects and API key validation
+- 📊 **Prometheus metrics** - monitor performance, cache efficiency, and business metrics
 - 🚀 **Blazing fast** - built with Rust and Actix-web
 - 💾 **SQLite storage** - no database server required
 - ⚡ **WAL mode** - SQLite Write-Ahead Logging for better concurrency
@@ -37,7 +38,8 @@ This project demonstrates:
 10. **Authentication** - Per-user API key authentication with SHA-256 hashing
 11. **Authorization** - Resource ownership and access control
 12. **Caching** - In-memory caching with TTL and automatic invalidation
-13. **Testing** - Unit and integration tests
+13. **Metrics** - Prometheus metrics for observability and monitoring
+14. **Testing** - Unit and integration tests
 
 ## Project Structure
 
@@ -53,6 +55,7 @@ url-shortener/
     ├── config.rs           # Configuration management
     ├── db.rs               # Database pool, WAL configuration, and migrations
     ├── cache.rs            # In-memory caching for URLs and API keys
+    ├── metrics.rs          # Prometheus metrics for monitoring
     ├── models.rs           # Data structures and DTOs
     ├── errors.rs           # Custom error types and HTTP response mapping
     ├── queries.rs          # SQL query constants
@@ -606,6 +609,64 @@ The cache is automatically invalidated when data changes:
 - **Lower latency**: Cache hits avoid database round-trips
 - **Lock-free concurrency**: `moka` provides thread-safe access without locks
 
+## Prometheus Metrics
+
+The application exposes Prometheus metrics at `/metrics` for monitoring and observability.
+
+### Accessing Metrics
+
+```bash
+# Get all metrics
+curl http://localhost:8080/metrics
+```
+
+### Available Metrics
+
+#### HTTP Metrics (Automatic via actix-web-prom)
+
+| Metric | Type | Labels | Description |
+|--------|------|--------|-------------|
+| `url_shortener_http_requests_total` | Counter | endpoint, method, status | Total HTTP requests |
+| `url_shortener_http_request_duration_seconds` | Histogram | endpoint, method | Request latency distribution |
+
+#### Custom Business Metrics
+
+| Metric | Type | Labels | Description |
+|--------|------|--------|-------------|
+| `url_shortener_cache_hits_total` | Counter | cache_type | Cache hits (url, api_key) |
+| `url_shortener_cache_misses_total` | Counter | cache_type | Cache misses (url, api_key) |
+| `url_shortener_redirects_total` | Counter | - | Total URL redirects performed |
+| `url_shortener_urls_created_total` | Counter | - | Total URLs created |
+| `url_shortener_api_key_validations_total` | Counter | result | API key validations (success, invalid) |
+
+### Example PromQL Queries
+
+```promql
+# Requests per second
+rate(url_shortener_http_requests_total[5m])
+
+# Redirects per second
+rate(url_shortener_redirects_total[5m])
+
+# Cache hit ratio for URL lookups
+url_shortener_cache_hits_total{cache_type="url"} /
+(url_shortener_cache_hits_total{cache_type="url"} + url_shortener_cache_misses_total{cache_type="url"})
+
+# Error rate (5xx responses)
+rate(url_shortener_http_requests_total{status=~"5.."}[5m])
+
+# API key validation failure rate
+rate(url_shortener_api_key_validations_total{result="invalid"}[5m])
+```
+
+### Disabling Metrics
+
+Set the environment variable to disable the metrics endpoint:
+
+```bash
+METRICS_ENABLED=false
+```
+
 ## Database Schema
 
 The application uses SQLite with six tables:
@@ -681,6 +742,7 @@ Environment variables (set in `.env` file):
 | `URL_CACHE_MAX_CAPACITY` | `10000` | Maximum number of URLs to cache |
 | `API_KEY_CACHE_TTL_SECS` | `600` | API key cache time-to-live in seconds (10 min) |
 | `API_KEY_CACHE_MAX_CAPACITY` | `1000` | Maximum number of API keys to cache |
+| `METRICS_ENABLED` | `true` | Enable Prometheus metrics endpoint at /metrics |
 
 ## Testing with cURL
 
@@ -794,7 +856,7 @@ Here are some ideas for extending this project:
 6. ~~**Tags/Categories** - Organize URLs with tags~~ ✅ Done!
 7. **Web UI** - Add a frontend with HTML templates or SPA
 8. ~~**Caching** - Add Redis or in-memory caching for hot URLs~~ ✅ Done!
-9. **Metrics** - Add Prometheus metrics for monitoring
+9. ~~**Metrics** - Add Prometheus metrics for monitoring~~ ✅ Done!
 10. **Docker Support** - Add Dockerfile and docker-compose for deployment
 
 ## Dependencies
@@ -818,6 +880,8 @@ Here are some ideas for extending this project:
 | `sha2` | SHA-256 hashing for API keys |
 | `rand` | Random generation for API keys |
 | `moka` | In-memory caching with TTL support |
+| `actix-web-prom` | Prometheus metrics middleware |
+| `prometheus` | Prometheus metrics library |
 
 ## License
 
