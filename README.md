@@ -17,6 +17,7 @@ A fast, lightweight URL shortener built with **Rust**, **Actix-web**, and **SQLi
 - 🛡️ **Rate limiting** - 60 requests/minute per IP to prevent abuse
 - ⚡ **In-memory caching** - moka-based caching for URL redirects and API key validation
 - 📊 **Prometheus metrics** - monitor performance, cache efficiency, and business metrics
+- 📱 **QR codes** - generate QR codes for short URLs in PNG or SVG format
 - 🚀 **Blazing fast** - built with Rust and Actix-web
 - 💾 **SQLite storage** - no database server required
 - ⚡ **WAL mode** - SQLite Write-Ahead Logging for better concurrency
@@ -39,7 +40,8 @@ This project demonstrates:
 11. **Authorization** - Resource ownership and access control
 12. **Caching** - In-memory caching with TTL and automatic invalidation
 13. **Metrics** - Prometheus metrics for observability and monitoring
-14. **Testing** - Unit and integration tests
+14. **QR Code Generation** - Creating QR codes with the qrcode crate
+15. **Testing** - Unit and integration tests
 
 ## Project Structure
 
@@ -56,6 +58,7 @@ url-shortener/
     ├── db.rs               # Database pool, WAL configuration, and migrations
     ├── cache.rs            # In-memory caching for URLs and API keys
     ├── metrics.rs          # Prometheus metrics for monitoring
+    ├── qr.rs               # QR code generation
     ├── models.rs           # Data structures and DTOs
     ├── errors.rs           # Custom error types and HTTP response mapping
     ├── queries.rs          # SQL query constants
@@ -294,6 +297,29 @@ X-API-Key: usk_your_key_here
     ]
 }
 ```
+
+---
+
+### Get QR Code for URL (Authenticated)
+
+Generate a QR code image for a short URL.
+
+```bash
+GET /api/urls/{id}/qr
+GET /api/urls/{id}/qr?format=svg
+GET /api/urls/{id}/qr?format=png&size=512
+X-API-Key: usk_your_key_here
+```
+
+**Query Parameters:**
+- `format`: Output format - `png` (default) or `svg`
+- `size`: Size in pixels (default: 256, min: 64, max: 1024)
+
+**Response:**
+- `image/png` - PNG image of the QR code (default)
+- `image/svg+xml` - SVG image of the QR code
+
+The QR code encodes the full short URL (e.g., `http://localhost:8080/abc123`).
 
 ---
 
@@ -782,6 +808,18 @@ curl -H "X-API-Key: YOUR_API_KEY" \
 curl -H "X-API-Key: YOUR_API_KEY" \
   http://localhost:8080/api/urls/1/stats
 
+# Get QR code as PNG (default)
+curl -H "X-API-Key: YOUR_API_KEY" \
+  http://localhost:8080/api/urls/1/qr -o qrcode.png
+
+# Get QR code as SVG
+curl -H "X-API-Key: YOUR_API_KEY" \
+  "http://localhost:8080/api/urls/1/qr?format=svg" -o qrcode.svg
+
+# Get QR code with custom size
+curl -H "X-API-Key: YOUR_API_KEY" \
+  "http://localhost:8080/api/urls/1/qr?size=512" -o qrcode_large.png
+
 # Delete a URL
 curl -X DELETE -H "X-API-Key: YOUR_API_KEY" \
   http://localhost:8080/api/urls/1
@@ -849,7 +887,7 @@ curl -X DELETE -H "X-API-Key: YOUR_API_KEY" \
 Here are some ideas for extending this project:
 
 1. ~~**Authentication** - Add API keys or JWT authentication~~ ✅ Done!
-2. **QR Codes** - Generate QR codes for short URLs
+2. ~~**QR Codes** - Generate QR codes for short URLs~~ ✅ Done!
 3. **Custom Domains** - Support multiple base URLs
 4. ~~**Bulk Operations** - Create/delete multiple URLs at once~~ ✅ Done!
 5. **Search** - Search URLs by original URL or code
@@ -882,6 +920,8 @@ Here are some ideas for extending this project:
 | `moka` | In-memory caching with TTL support |
 | `actix-web-prom` | Prometheus metrics middleware |
 | `prometheus` | Prometheus metrics library |
+| `qrcode` | QR code generation |
+| `image` | Image encoding (PNG) for QR codes |
 
 ## License
 
