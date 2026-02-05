@@ -17,6 +17,14 @@ pub struct Config {
     pub base_url: String,
     /// Length of generated short codes
     pub short_code_length: usize,
+    /// URL cache TTL in seconds
+    pub url_cache_ttl_secs: u64,
+    /// URL cache maximum capacity
+    pub url_cache_max_capacity: u64,
+    /// API key cache TTL in seconds
+    pub api_key_cache_ttl_secs: u64,
+    /// API key cache maximum capacity
+    pub api_key_cache_max_capacity: u64,
 }
 
 impl Config {
@@ -28,6 +36,10 @@ impl Config {
     /// - `PORT`: Server port (default: 8080)
     /// - `BASE_URL`: Base URL for short links (default: "http://localhost:8080")
     /// - `SHORT_CODE_LENGTH`: Length of generated codes (default: 7)
+    /// - `URL_CACHE_TTL_SECS`: URL cache TTL in seconds (default: 300)
+    /// - `URL_CACHE_MAX_CAPACITY`: URL cache max capacity (default: 10000)
+    /// - `API_KEY_CACHE_TTL_SECS`: API key cache TTL in seconds (default: 600)
+    /// - `API_KEY_CACHE_MAX_CAPACITY`: API key cache max capacity (default: 1000)
     pub fn from_env() -> Self {
         let host = env::var("HOST").unwrap_or_else(|_| "127.0.0.1".to_string());
         let port: u16 = env::var("PORT")
@@ -47,6 +59,22 @@ impl Config {
                 .unwrap_or_else(|_| "7".to_string())
                 .parse()
                 .expect("SHORT_CODE_LENGTH must be a valid number"),
+            url_cache_ttl_secs: env::var("URL_CACHE_TTL_SECS")
+                .unwrap_or_else(|_| "300".to_string())
+                .parse()
+                .expect("URL_CACHE_TTL_SECS must be a valid number"),
+            url_cache_max_capacity: env::var("URL_CACHE_MAX_CAPACITY")
+                .unwrap_or_else(|_| "10000".to_string())
+                .parse()
+                .expect("URL_CACHE_MAX_CAPACITY must be a valid number"),
+            api_key_cache_ttl_secs: env::var("API_KEY_CACHE_TTL_SECS")
+                .unwrap_or_else(|_| "600".to_string())
+                .parse()
+                .expect("API_KEY_CACHE_TTL_SECS must be a valid number"),
+            api_key_cache_max_capacity: env::var("API_KEY_CACHE_MAX_CAPACITY")
+                .unwrap_or_else(|_| "1000".to_string())
+                .parse()
+                .expect("API_KEY_CACHE_MAX_CAPACITY must be a valid number"),
         }
     }
 }
@@ -59,6 +87,10 @@ impl Default for Config {
             port: 8080,
             base_url: "http://localhost:8080".to_string(),
             short_code_length: 7,
+            url_cache_ttl_secs: 300,
+            url_cache_max_capacity: 10_000,
+            api_key_cache_ttl_secs: 600,
+            api_key_cache_max_capacity: 1_000,
         }
     }
 }

@@ -130,6 +130,9 @@ impl ApiKeys {
 
     pub const COUNT_BY_ID_AND_USER: &'static str =
         "SELECT COUNT(*) FROM api_keys WHERE id = ?1 AND user_id = ?2";
+
+    pub const SELECT_KEY_HASH_BY_ID: &'static str =
+        "SELECT key_hash FROM api_keys WHERE id = ?1";
 }
 
 /// URL-related queries for CRUD operations.
@@ -160,6 +163,8 @@ impl Urls {
     pub const DELETE_BY_ID: &'static str = "DELETE FROM urls WHERE id = ?1";
 
     pub const DELETE_BY_ID_AND_USER: &'static str = "DELETE FROM urls WHERE id = ?1 AND user_id = ?2";
+
+    pub const SELECT_SHORT_CODE_BY_ID: &'static str = "SELECT short_code FROM urls WHERE id = ?1";
 
     pub const INCREMENT_CLICKS: &'static str =
         "UPDATE urls SET clicks = clicks + 1, updated_at = datetime('now') WHERE id = ?1";

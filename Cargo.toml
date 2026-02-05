@@ -34,6 +34,7 @@ lazy_static = "1"        # Lazy static initialization
 regex = "1"              # Regular expressions
 sha2 = "0.10"            # SHA-256 hashing for API keys
 rand = "0.8"             # Random generation for API keys
+moka = { version = "0.12", features = ["sync"] }  # In-memory caching
 
 [dev-dependencies]
 actix-rt = "2"

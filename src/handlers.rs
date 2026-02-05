@@ -6,6 +6,7 @@ use actix_web::{delete, get, post, web, HttpRequest, HttpResponse};
 use validator::Validate;
 
 use crate::auth::AuthenticatedUser;
+use crate::cache::AppCache;
 use crate::config::Config;
 use crate::db::DbPool;
 use crate::errors::AppError;
@@ -180,10 +181,11 @@ async fn list_api_keys(
 async fn revoke_api_key(
     user: AuthenticatedUser,
     pool: web::Data<DbPool>,
+    cache: web::Data<AppCache>,
     path: web::Path<i64>,
 ) -> Result<HttpResponse, AppError> {
     let key_id = path.into_inner();
-    services::revoke_api_key(&pool, user.user_id, key_id)?;
+    services::revoke_api_key_with_cache(&pool, Some(&cache), user.user_id, key_id)?;
 
     Ok(HttpResponse::Ok().json(MessageResponse::new("API key revoked successfully")))
 }
@@ -341,10 +343,11 @@ async fn get_url_stats(
 async fn delete_url_by_id(
     user: AuthenticatedUser,
     pool: web::Data<DbPool>,
+    cache: web::Data<AppCache>,
     path: web::Path<i64>,
 ) -> Result<HttpResponse, AppError> {
     let id = path.into_inner();
-    services::delete_url(&pool, id, user.user_id)?;
+    services::delete_url_with_cache(&pool, Some(&cache), id, user.user_id)?;
 
     Ok(HttpResponse::Ok().json(MessageResponse::new("URL deleted successfully")))
 }
@@ -441,14 +444,15 @@ async fn bulk_create_urls(
 async fn bulk_delete_urls(
     user: AuthenticatedUser,
     pool: web::Data<DbPool>,
+    cache: web::Data<AppCache>,
     body: web::Json<BulkDeleteUrlRequest>,
 ) -> Result<HttpResponse, AppError> {
     // Validate input
     body.validate()
         .map_err(|e| AppError::ValidationError(format!("Invalid input: {}", e)))?;
 
-    // Perform bulk delete
-    let response = services::bulk_delete_urls(&pool, &body.ids, user.user_id)?;
+    // Perform bulk delete with cache invalidation
+    let response = services::bulk_delete_urls_with_cache(&pool, Some(&cache), &body.ids, user.user_id)?;
 
     // Return appropriate status code based on results
     let status_code = if response.status == BulkOperationStatus::Success {
@@ -670,6 +674,7 @@ async fn get_urls_by_tag(
 #[get("/{short_code}")]
 async fn redirect_to_url(
     pool: web::Data<DbPool>,
+    cache: web::Data<AppCache>,
     path: web::Path<String>,
     req: HttpRequest,
 ) -> Result<HttpResponse, AppError> {
@@ -680,7 +685,7 @@ async fn redirect_to_url(
         return Err(AppError::NotFound("Resource not found".into()));
     }
 
-    let url = services::get_url_by_code(&pool, &short_code)?;
+    let url = services::get_url_by_code_cached(&pool, &cache, &short_code)?;
 
     // Extract request metadata for analytics
     let ip_address = req
@@ -763,11 +768,13 @@ mod tests {
         Error = actix_web::Error,
     > {
         let config = Config::default();
+        let cache = AppCache::default();
 
         test::init_service(
             App::new()
                 .app_data(web::Data::new(pool))
                 .app_data(web::Data::new(config))
+                .app_data(web::Data::new(cache))
                 .configure(configure_routes),
         )
         .await

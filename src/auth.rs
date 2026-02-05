@@ -5,6 +5,7 @@
 use actix_web::{dev::Payload, web, FromRequest, HttpRequest};
 use std::future::{ready, Ready};
 
+use crate::cache::AppCache;
 use crate::db::DbPool;
 use crate::errors::AppError;
 use crate::services;
@@ -36,6 +37,9 @@ impl FromRequest for AuthenticatedUser {
             }
         };
 
+        // Get the cache from app data (optional - falls back to non-cached if unavailable)
+        let cache = req.app_data::<web::Data<AppCache>>();
+
         // Try to extract the API key from headers
         let provided_key = match extract_api_key(req) {
             Some(key) => key.to_string(),
@@ -46,8 +50,14 @@ impl FromRequest for AuthenticatedUser {
             }
         };
 
-        // Validate the API key against the database
-        match services::validate_api_key(pool, &provided_key) {
+        // Validate the API key (using cache if available)
+        let result = if let Some(cache) = cache {
+            services::validate_api_key_cached(pool, cache, &provided_key)
+        } else {
+            services::validate_api_key(pool, &provided_key)
+        };
+
+        match result {
             Ok((user_id, _key_id)) => ready(Ok(AuthenticatedUser { user_id })),
             Err(e) => ready(Err(e)),
         }
@@ -98,10 +108,12 @@ mod tests {
     #[actix_rt::test]
     async fn test_missing_api_key_returns_401() {
         let pool = setup_test_pool();
+        let cache = AppCache::default();
 
         let app = test::init_service(
             App::new()
                 .app_data(web::Data::new(pool))
+                .app_data(web::Data::new(cache))
                 .route("/protected", web::get().to(protected_endpoint)),
         )
         .await;
@@ -115,10 +127,12 @@ mod tests {
     #[actix_rt::test]
     async fn test_invalid_api_key_returns_401() {
         let pool = setup_test_pool();
+        let cache = AppCache::default();
 
         let app = test::init_service(
             App::new()
                 .app_data(web::Data::new(pool))
+                .app_data(web::Data::new(cache))
                 .route("/protected", web::get().to(protected_endpoint)),
         )
         .await;
@@ -135,6 +149,7 @@ mod tests {
     #[actix_rt::test]
     async fn test_valid_api_key_with_bearer() {
         let pool = setup_test_pool();
+        let cache = AppCache::default();
 
         // Register a user and get their API key
         let (user, api_key) = services::register_user(&pool, "test@example.com").unwrap();
@@ -142,6 +157,7 @@ mod tests {
         let app = test::init_service(
             App::new()
                 .app_data(web::Data::new(pool))
+                .app_data(web::Data::new(cache))
                 .route("/protected", web::get().to(protected_endpoint)),
         )
         .await;
@@ -161,6 +177,7 @@ mod tests {
     #[actix_rt::test]
     async fn test_valid_api_key_with_x_api_key_header() {
         let pool = setup_test_pool();
+        let cache = AppCache::default();
 
         // Register a user and get their API key
         let (user, api_key) = services::register_user(&pool, "test2@example.com").unwrap();
@@ -168,6 +185,7 @@ mod tests {
         let app = test::init_service(
             App::new()
                 .app_data(web::Data::new(pool))
+                .app_data(web::Data::new(cache))
                 .route("/protected", web::get().to(protected_endpoint)),
         )
         .await;
@@ -187,6 +205,7 @@ mod tests {
     #[actix_rt::test]
     async fn test_revoked_key_returns_401() {
         let pool = setup_test_pool();
+        let cache = AppCache::default();
 
         // Register a user
         let (user, _default_key) = services::register_user(&pool, "test3@example.com").unwrap();
@@ -198,6 +217,7 @@ mod tests {
         let app = test::init_service(
             App::new()
                 .app_data(web::Data::new(pool))
+                .app_data(web::Data::new(cache))
                 .route("/protected", web::get().to(protected_endpoint)),
         )
         .await;

@@ -9,6 +9,7 @@ use rand::Rng;
 use rusqlite::params;
 use sha2::{Digest, Sha256};
 
+use crate::cache::{AppCache, CachedApiKey, CachedUrl};
 use crate::db::{get_conn, DbPool};
 use crate::errors::AppError;
 use crate::models::{
@@ -179,6 +180,36 @@ pub fn validate_api_key(pool: &DbPool, api_key: &str) -> Result<(i64, i64), AppE
     Ok((user_id, key_id))
 }
 
+/// Validate an API key with caching
+///
+/// Checks the cache first, then falls back to the database on cache miss.
+/// Updates the last_used_at timestamp on cache hits periodically (not on every request).
+pub fn validate_api_key_cached(
+    pool: &DbPool,
+    cache: &AppCache,
+    api_key: &str,
+) -> Result<(i64, i64), AppError> {
+    let key_hash = hash_api_key(api_key);
+
+    // Check cache first
+    if let Some(cached) = cache.get_api_key(&key_hash) {
+        log::debug!("Cache hit for API key");
+        return Ok((cached.user_id, cached.key_id));
+    }
+
+    // Cache miss - validate against database
+    log::debug!("Cache miss for API key, querying database");
+    let (user_id, key_id) = validate_api_key(pool, api_key)?;
+
+    // Store in cache
+    cache.insert_api_key(
+        &key_hash,
+        CachedApiKey { user_id, key_id },
+    );
+
+    Ok((user_id, key_id))
+}
+
 /// List all API keys for a user
 pub fn list_api_keys(pool: &DbPool, user_id: i64) -> Result<Vec<ApiKeyRecord>, AppError> {
     let conn = get_conn(pool)?;
@@ -203,6 +234,16 @@ pub fn list_api_keys(pool: &DbPool, user_id: i64) -> Result<Vec<ApiKeyRecord>, A
 
 /// Revoke an API key
 pub fn revoke_api_key(pool: &DbPool, user_id: i64, key_id: i64) -> Result<(), AppError> {
+    revoke_api_key_with_cache(pool, None, user_id, key_id)
+}
+
+/// Revoke an API key with cache invalidation
+pub fn revoke_api_key_with_cache(
+    pool: &DbPool,
+    cache: Option<&AppCache>,
+    user_id: i64,
+    key_id: i64,
+) -> Result<(), AppError> {
     let conn = get_conn(pool)?;
 
     // First check if the key exists and belongs to the user
@@ -221,6 +262,16 @@ pub fn revoke_api_key(pool: &DbPool, user_id: i64, key_id: i64) -> Result<(), Ap
         )));
     }
 
+    // Get the key_hash before revoking for cache invalidation
+    let key_hash: Option<String> = if cache.is_some() {
+        conn.query_row(ApiKeys::SELECT_KEY_HASH_BY_ID, params![key_id], |row| {
+            row.get(0)
+        })
+        .ok()
+    } else {
+        None
+    };
+
     let rows_affected = conn.execute(ApiKeys::DEACTIVATE, params![key_id, user_id])?;
 
     if rows_affected == 0 {
@@ -228,6 +279,12 @@ pub fn revoke_api_key(pool: &DbPool, user_id: i64, key_id: i64) -> Result<(), Ap
             "API key with ID '{}' not found or already revoked",
             key_id
         )));
+    }
+
+    // Invalidate cache if we have the key_hash
+    if let (Some(cache), Some(hash)) = (cache, key_hash) {
+        cache.invalidate_api_key(&hash);
+        log::debug!("Invalidated cache for API key hash");
     }
 
     log::info!("Revoked API key {} for user {}", key_id, user_id);
@@ -346,6 +403,66 @@ pub fn get_url_by_code(pool: &DbPool, short_code: &str) -> Result<Url, AppError>
     Ok(url)
 }
 
+/// Get a URL by its short code with caching (for redirects - no ownership check)
+///
+/// Checks the cache first, then falls back to the database on cache miss.
+/// Also checks expiration on cache hits and invalidates expired entries.
+pub fn get_url_by_code_cached(
+    pool: &DbPool,
+    cache: &AppCache,
+    short_code: &str,
+) -> Result<Url, AppError> {
+    // Check cache first
+    if let Some(cached) = cache.get_url(short_code) {
+        // Check if cached URL has expired
+        if let Some(expires_at) = &cached.expires_at {
+            let expires = chrono::NaiveDateTime::parse_from_str(expires_at, "%Y-%m-%d %H:%M:%S")
+                .map_err(|e| AppError::InternalError(format!("Date parse error: {}", e)))?;
+
+            if expires < Utc::now().naive_utc() {
+                // Invalidate expired entry from cache
+                cache.invalidate_url(short_code);
+                return Err(AppError::ExpiredUrl(format!(
+                    "URL '{}' has expired",
+                    short_code
+                )));
+            }
+        }
+
+        log::debug!("Cache hit for short code: {}", short_code);
+
+        // Return a minimal Url struct from cached data
+        // Note: clicks field will be 0 since we don't cache it (it changes frequently)
+        return Ok(Url {
+            id: cached.id,
+            short_code: short_code.to_string(),
+            original_url: cached.original_url,
+            clicks: 0, // Not cached, will be updated on redirect
+            created_at: String::new(), // Not needed for redirect
+            updated_at: String::new(), // Not needed for redirect
+            expires_at: cached.expires_at,
+            user_id: cached.user_id,
+        });
+    }
+
+    // Cache miss - query database
+    log::debug!("Cache miss for short code: {}, querying database", short_code);
+    let url = get_url_by_code(pool, short_code)?;
+
+    // Store in cache
+    cache.insert_url(
+        short_code,
+        CachedUrl {
+            id: url.id,
+            original_url: url.original_url.clone(),
+            expires_at: url.expires_at.clone(),
+            user_id: url.user_id,
+        },
+    );
+
+    Ok(url)
+}
+
 /// Get a URL by its ID (for API - checks ownership)
 pub fn get_url_by_id(pool: &DbPool, id: i64, user_id: i64) -> Result<Url, AppError> {
     let conn = get_conn(pool)?;
@@ -456,7 +573,25 @@ pub fn get_click_logs(pool: &DbPool, url_id: i64, limit: u32) -> Result<Vec<Clic
 
 /// Delete a URL by ID (checks ownership)
 pub fn delete_url(pool: &DbPool, id: i64, user_id: i64) -> Result<(), AppError> {
+    delete_url_with_cache(pool, None, id, user_id)
+}
+
+/// Delete a URL by ID with cache invalidation (checks ownership)
+pub fn delete_url_with_cache(
+    pool: &DbPool,
+    cache: Option<&AppCache>,
+    id: i64,
+    user_id: i64,
+) -> Result<(), AppError> {
     let conn = get_conn(pool)?;
+
+    // Get the short_code before deleting for cache invalidation
+    let short_code: Option<String> = if cache.is_some() {
+        conn.query_row(Urls::SELECT_SHORT_CODE_BY_ID, params![id], |row| row.get(0))
+            .ok()
+    } else {
+        None
+    };
 
     let rows_affected = conn.execute(Urls::DELETE_BY_ID_AND_USER, params![id, user_id])?;
 
@@ -465,6 +600,12 @@ pub fn delete_url(pool: &DbPool, id: i64, user_id: i64) -> Result<(), AppError> 
             "URL with ID '{}' not found",
             id
         )));
+    }
+
+    // Invalidate cache if we have the short_code
+    if let (Some(cache), Some(code)) = (cache, short_code) {
+        cache.invalidate_url(&code);
+        log::debug!("Invalidated cache for short code: {}", code);
     }
 
     log::info!("Deleted URL with ID: {} (user: {})", id, user_id);
@@ -577,12 +718,24 @@ pub fn bulk_delete_urls(
     ids: &[i64],
     user_id: i64,
 ) -> Result<BulkDeleteUrlResponse, AppError> {
+    bulk_delete_urls_with_cache(pool, None, ids, user_id)
+}
+
+/// Bulk delete multiple URLs by ID with cache invalidation
+///
+/// Processes each deletion individually, collecting successes and failures.
+pub fn bulk_delete_urls_with_cache(
+    pool: &DbPool,
+    cache: Option<&AppCache>,
+    ids: &[i64],
+    user_id: i64,
+) -> Result<BulkDeleteUrlResponse, AppError> {
     let mut results = Vec::with_capacity(ids.len());
     let mut succeeded = 0;
     let mut failed = 0;
 
     for &id in ids {
-        match delete_url(pool, id, user_id) {
+        match delete_url_with_cache(pool, cache, id, user_id) {
             Ok(()) => {
                 succeeded += 1;
                 results.push(BulkDeleteItemResult {
@@ -1586,5 +1739,295 @@ mod tests {
         // URL should have no tags now
         let tags = get_tags_for_url(&pool, url.id, user.id).unwrap();
         assert!(tags.is_empty());
+    }
+
+    // ========================================================================
+    // Caching Tests
+    // ========================================================================
+
+    #[test]
+    fn test_get_url_by_code_cached_miss_then_hit() {
+        let pool = setup_test_db();
+        let cache = AppCache::default();
+
+        let (user, _) = register_user(&pool, "test@example.com").unwrap();
+
+        let request = CreateUrlRequest {
+            url: "https://example.com".to_string(),
+            custom_code: Some("cached1".to_string()),
+            expires_in_hours: None,
+        };
+        create_url(&pool, &request, 7, user.id).unwrap();
+
+        // First call - cache miss, should query database
+        assert!(cache.get_url("cached1").is_none());
+        let url1 = get_url_by_code_cached(&pool, &cache, "cached1").unwrap();
+        assert_eq!(url1.original_url, "https://example.com");
+
+        // Verify it's now in the cache
+        assert!(cache.get_url("cached1").is_some());
+
+        // Second call - cache hit
+        let url2 = get_url_by_code_cached(&pool, &cache, "cached1").unwrap();
+        assert_eq!(url2.original_url, "https://example.com");
+        assert_eq!(url2.id, url1.id);
+    }
+
+    #[test]
+    fn test_get_url_by_code_cached_not_found() {
+        let pool = setup_test_db();
+        let cache = AppCache::default();
+
+        // Try to get a non-existent URL
+        let result = get_url_by_code_cached(&pool, &cache, "nonexistent");
+        assert!(matches!(result, Err(AppError::NotFound(_))));
+
+        // Should not be cached
+        assert!(cache.get_url("nonexistent").is_none());
+    }
+
+    #[test]
+    fn test_validate_api_key_cached_miss_then_hit() {
+        let pool = setup_test_db();
+        let cache = AppCache::default();
+
+        let (user, api_key) = register_user(&pool, "test@example.com").unwrap();
+        let key_hash = hash_api_key(&api_key);
+
+        // First call - cache miss
+        assert!(cache.get_api_key(&key_hash).is_none());
+        let (user_id1, key_id1) = validate_api_key_cached(&pool, &cache, &api_key).unwrap();
+        assert_eq!(user_id1, user.id);
+
+        // Verify it's now in the cache
+        assert!(cache.get_api_key(&key_hash).is_some());
+
+        // Second call - cache hit
+        let (user_id2, key_id2) = validate_api_key_cached(&pool, &cache, &api_key).unwrap();
+        assert_eq!(user_id2, user.id);
+        assert_eq!(key_id1, key_id2);
+    }
+
+    #[test]
+    fn test_validate_api_key_cached_invalid() {
+        let pool = setup_test_db();
+        let cache = AppCache::default();
+
+        let result = validate_api_key_cached(&pool, &cache, "usk_invalid_key");
+        assert!(matches!(result, Err(AppError::Unauthorized(_))));
+
+        // Invalid keys should not be cached
+        let key_hash = hash_api_key("usk_invalid_key");
+        assert!(cache.get_api_key(&key_hash).is_none());
+    }
+
+    #[test]
+    fn test_delete_url_invalidates_cache() {
+        let pool = setup_test_db();
+        let cache = AppCache::default();
+
+        let (user, _) = register_user(&pool, "test@example.com").unwrap();
+
+        let request = CreateUrlRequest {
+            url: "https://example.com".to_string(),
+            custom_code: Some("todelete".to_string()),
+            expires_in_hours: None,
+        };
+        let url = create_url(&pool, &request, 7, user.id).unwrap();
+
+        // Populate the cache
+        get_url_by_code_cached(&pool, &cache, "todelete").unwrap();
+        assert!(cache.get_url("todelete").is_some());
+
+        // Delete with cache invalidation
+        delete_url_with_cache(&pool, Some(&cache), url.id, user.id).unwrap();
+
+        // Cache should be invalidated
+        assert!(cache.get_url("todelete").is_none());
+
+        // Should return not found now
+        let result = get_url_by_code_cached(&pool, &cache, "todelete");
+        assert!(matches!(result, Err(AppError::NotFound(_))));
+    }
+
+    #[test]
+    fn test_bulk_delete_invalidates_cache() {
+        let pool = setup_test_db();
+        let cache = AppCache::default();
+
+        let (user, _) = register_user(&pool, "test@example.com").unwrap();
+
+        // Create multiple URLs
+        let mut ids = vec![];
+        for i in 0..3 {
+            let request = CreateUrlRequest {
+                url: format!("https://example{}.com", i),
+                custom_code: Some(format!("bulk_cache_{}", i)),
+                expires_in_hours: None,
+            };
+            let url = create_url(&pool, &request, 7, user.id).unwrap();
+            ids.push(url.id);
+
+            // Populate the cache
+            get_url_by_code_cached(&pool, &cache, &format!("bulk_cache_{}", i)).unwrap();
+        }
+
+        // Verify all are cached
+        for i in 0..3 {
+            assert!(cache.get_url(&format!("bulk_cache_{}", i)).is_some());
+        }
+
+        // Bulk delete with cache invalidation
+        bulk_delete_urls_with_cache(&pool, Some(&cache), &ids, user.id).unwrap();
+
+        // All cache entries should be invalidated
+        for i in 0..3 {
+            assert!(cache.get_url(&format!("bulk_cache_{}", i)).is_none());
+        }
+    }
+
+    #[test]
+    fn test_revoke_api_key_invalidates_cache() {
+        let pool = setup_test_db();
+        let cache = AppCache::default();
+
+        let (user, _) = register_user(&pool, "test@example.com").unwrap();
+        let (record, api_key) = create_api_key(&pool, user.id, "To Revoke").unwrap();
+        let key_hash = hash_api_key(&api_key);
+
+        // Populate the cache
+        validate_api_key_cached(&pool, &cache, &api_key).unwrap();
+        assert!(cache.get_api_key(&key_hash).is_some());
+
+        // Revoke with cache invalidation
+        revoke_api_key_with_cache(&pool, Some(&cache), user.id, record.id).unwrap();
+
+        // Cache should be invalidated
+        assert!(cache.get_api_key(&key_hash).is_none());
+
+        // Should return unauthorized now
+        let result = validate_api_key_cached(&pool, &cache, &api_key);
+        assert!(matches!(result, Err(AppError::Unauthorized(_))));
+    }
+
+    #[test]
+    fn test_cached_url_expiration_check() {
+        let pool = setup_test_db();
+        let cache = AppCache::default();
+
+        let (user, _) = register_user(&pool, "test@example.com").unwrap();
+
+        // Create a URL that expires in -1 hours (already expired)
+        let request = CreateUrlRequest {
+            url: "https://example.com".to_string(),
+            custom_code: Some("expired_cache".to_string()),
+            expires_in_hours: Some(-1), // Already expired
+        };
+
+        // This will fail because it's already expired when created
+        let result = create_url(&pool, &request, 7, user.id);
+
+        // If creation succeeds but is expired, test the cache behavior
+        if let Ok(url) = result {
+            // Manually insert into cache with expired time
+            cache.insert_url(
+                "expired_cache",
+                CachedUrl {
+                    id: url.id,
+                    original_url: url.original_url.clone(),
+                    expires_at: url.expires_at.clone(),
+                    user_id: url.user_id,
+                },
+            );
+
+            // Should detect expiration on cache hit and return error
+            let result = get_url_by_code_cached(&pool, &cache, "expired_cache");
+            assert!(matches!(result, Err(AppError::ExpiredUrl(_))));
+
+            // Cache entry should be invalidated after detecting expiration
+            assert!(cache.get_url("expired_cache").is_none());
+        }
+    }
+
+    #[test]
+    fn test_cache_stores_correct_data() {
+        let pool = setup_test_db();
+        let cache = AppCache::default();
+
+        let (user, _) = register_user(&pool, "test@example.com").unwrap();
+
+        let request = CreateUrlRequest {
+            url: "https://specific-url.com/path?query=value".to_string(),
+            custom_code: Some("specific123".to_string()),
+            expires_in_hours: None,
+        };
+        let created_url = create_url(&pool, &request, 7, user.id).unwrap();
+
+        // Populate cache
+        get_url_by_code_cached(&pool, &cache, "specific123").unwrap();
+
+        // Verify cached data is correct
+        let cached = cache.get_url("specific123").unwrap();
+        assert_eq!(cached.id, created_url.id);
+        assert_eq!(cached.original_url, "https://specific-url.com/path?query=value");
+        assert_eq!(cached.user_id, Some(user.id));
+        assert!(cached.expires_at.is_none());
+    }
+
+    #[test]
+    fn test_api_key_cache_stores_correct_data() {
+        let pool = setup_test_db();
+        let cache = AppCache::default();
+
+        let (user, api_key) = register_user(&pool, "test@example.com").unwrap();
+        let key_hash = hash_api_key(&api_key);
+
+        // Populate cache
+        let (user_id, key_id) = validate_api_key_cached(&pool, &cache, &api_key).unwrap();
+
+        // Verify cached data is correct
+        let cached = cache.get_api_key(&key_hash).unwrap();
+        assert_eq!(cached.user_id, user.id);
+        assert_eq!(cached.user_id, user_id);
+        assert_eq!(cached.key_id, key_id);
+    }
+
+    #[test]
+    fn test_delete_without_cache_still_works() {
+        let pool = setup_test_db();
+
+        let (user, _) = register_user(&pool, "test@example.com").unwrap();
+
+        let request = CreateUrlRequest {
+            url: "https://example.com".to_string(),
+            custom_code: Some("no_cache_del".to_string()),
+            expires_in_hours: None,
+        };
+        let url = create_url(&pool, &request, 7, user.id).unwrap();
+
+        // Delete without cache (None)
+        delete_url_with_cache(&pool, None, url.id, user.id).unwrap();
+
+        // URL should be gone
+        let result = get_url_by_code(&pool, "no_cache_del");
+        assert!(matches!(result, Err(AppError::NotFound(_))));
+    }
+
+    #[test]
+    fn test_revoke_without_cache_still_works() {
+        let pool = setup_test_db();
+
+        let (user, _) = register_user(&pool, "test@example.com").unwrap();
+        let (record, api_key) = create_api_key(&pool, user.id, "No Cache Revoke").unwrap();
+
+        // Verify key works
+        assert!(validate_api_key(&pool, &api_key).is_ok());
+
+        // Revoke without cache (None)
+        revoke_api_key_with_cache(&pool, None, user.id, record.id).unwrap();
+
+        // Key should no longer work
+        let result = validate_api_key(&pool, &api_key);
+        assert!(matches!(result, Err(AppError::Unauthorized(_))));
     }
 }

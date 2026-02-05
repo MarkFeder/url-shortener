@@ -11,6 +11,7 @@
 //! - Per-user API key authentication
 
 mod auth;
+mod cache;
 mod config;
 mod db;
 mod errors;
@@ -40,6 +41,22 @@ async fn main() -> std::io::Result<()> {
 
     // Run database migrations
     db::run_migrations(&pool).expect("Failed to run database migrations");
+
+    // Initialize cache
+    let app_cache = cache::AppCache::new(
+        config.url_cache_ttl_secs,
+        config.url_cache_max_capacity,
+        config.api_key_cache_ttl_secs,
+        config.api_key_cache_max_capacity,
+    );
+
+    info!(
+        "Cache initialized: URL TTL={}s, URL capacity={}, API key TTL={}s, API key capacity={}",
+        config.url_cache_ttl_secs,
+        config.url_cache_max_capacity,
+        config.api_key_cache_ttl_secs,
+        config.api_key_cache_max_capacity
+    );
 
     info!(
         "Starting URL Shortener server at http://{}:{}",
@@ -77,6 +94,8 @@ async fn main() -> std::io::Result<()> {
             .app_data(web::Data::new(pool.clone()))
             // Add base URL to app state
             .app_data(web::Data::new(config.clone()))
+            // Add cache to app state
+            .app_data(web::Data::new(app_cache.clone()))
             // Enable rate limiting middleware
             .wrap(Governor::new(&governor_conf))
             // Enable logger middleware
