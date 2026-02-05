@@ -7,6 +7,7 @@ use image::{ImageBuffer, Luma};
 use qrcode::QrCode;
 use std::io::Cursor;
 
+use crate::constants::DEFAULT_QR_SIZE;
 use crate::errors::AppError;
 
 /// QR code output format
@@ -48,7 +49,7 @@ impl Default for QrOptions {
     fn default() -> Self {
         Self {
             format: QrFormat::Png,
-            size: 256,
+            size: DEFAULT_QR_SIZE,
         }
     }
 }

@@ -99,19 +99,13 @@ fn extract_api_key(req: &HttpRequest) -> Option<&str> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::db::{init_pool, run_migrations};
+    use crate::test_utils::setup_test_pool;
     use actix_web::{test, web, App, HttpResponse};
 
     async fn protected_endpoint(user: AuthenticatedUser) -> HttpResponse {
         HttpResponse::Ok().json(serde_json::json!({
             "user_id": user.user_id
         }))
-    }
-
-    fn setup_test_pool() -> DbPool {
-        let pool = init_pool("file::memory:?cache=shared").unwrap();
-        run_migrations(&pool).unwrap();
-        pool
     }
 
     #[actix_rt::test]

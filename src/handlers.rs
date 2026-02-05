@@ -8,6 +8,7 @@ use validator::Validate;
 use crate::auth::AuthenticatedUser;
 use crate::cache::AppCache;
 use crate::config::Config;
+use crate::constants::{DEFAULT_PAGE_LIMIT, DEFAULT_QR_SIZE, MAX_PAGE_LIMIT, MAX_QR_SIZE, MIN_QR_SIZE};
 use crate::db::DbPool;
 use crate::errors::AppError;
 use crate::metrics::AppMetrics;
@@ -285,7 +286,7 @@ async fn search_urls(
         ));
     }
 
-    let limit = query.limit.unwrap_or(20).min(100);
+    let limit = query.limit.unwrap_or(DEFAULT_PAGE_LIMIT).min(MAX_PAGE_LIMIT);
 
     let urls = services::search_urls(
         &pool,
@@ -426,7 +427,7 @@ async fn get_url_qr_code(
         .map(|f| QrFormat::from_str(f))
         .unwrap_or_default();
 
-    let size = query.size.unwrap_or(256).clamp(64, 1024);
+    let size = query.size.unwrap_or(DEFAULT_QR_SIZE).clamp(MIN_QR_SIZE, MAX_QR_SIZE);
 
     let options = QrOptions { format, size };
 
@@ -873,14 +874,8 @@ async fn health_check() -> HttpResponse {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::db::{init_pool, run_migrations};
+    use crate::test_utils::{setup_test_pool, test_cache, test_config};
     use actix_web::{test, App};
-
-    fn setup_test_pool() -> DbPool {
-        let pool = init_pool("file::memory:?cache=shared").unwrap();
-        run_migrations(&pool).unwrap();
-        pool
-    }
 
     async fn setup_test_app(
         pool: DbPool,
@@ -889,8 +884,8 @@ mod tests {
         Response = actix_web::dev::ServiceResponse,
         Error = actix_web::Error,
     > {
-        let config = Config::default();
-        let cache = AppCache::default();
+        let config = test_config();
+        let cache = test_cache();
 
         test::init_service(
             App::new()

@@ -13,6 +13,7 @@
 mod auth;
 mod cache;
 mod config;
+mod constants;
 mod db;
 mod errors;
 mod handlers;
@@ -21,6 +22,8 @@ mod models;
 mod qr;
 mod queries;
 mod services;
+#[cfg(test)]
+mod test_utils;
 
 use actix_governor::{Governor, GovernorConfigBuilder};
 use actix_web::{middleware::Logger, web, App, HttpServer};

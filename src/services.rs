@@ -10,6 +10,10 @@ use rusqlite::params;
 use sha2::{Digest, Sha256};
 
 use crate::cache::{AppCache, CachedApiKey, CachedUrl};
+use crate::constants::{
+    API_KEY_PREFIX, API_KEY_RANDOM_LENGTH, DEFAULT_API_KEY_NAME, DEFAULT_PAGE_LIMIT,
+    MAX_PAGE_LIMIT, SHORT_CODE_ALPHABET,
+};
 use crate::db::{get_conn, DbPool};
 use crate::errors::AppError;
 use crate::metrics::AppMetrics;
@@ -19,17 +23,6 @@ use crate::models::{
     CreateUrlRequest, CreateUrlResponse, ListUrlsQuery, Tag, Url, User,
 };
 use crate::queries::{ApiKeys, ClickLogs, Tags, UrlTags, Urls, Users};
-
-/// Characters used for generating short codes (URL-safe)
-const ALPHABET: [char; 62] = [
-    '0', '1', '2', '3', '4', '5', '6', '7', '8', '9', 'a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i',
-    'j', 'k', 'l', 'm', 'n', 'o', 'p', 'q', 'r', 's', 't', 'u', 'v', 'w', 'x', 'y', 'z', 'A', 'B',
-    'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L', 'M', 'N', 'O', 'P', 'Q', 'R', 'S', 'T', 'U',
-    'V', 'W', 'X', 'Y', 'Z',
-];
-
-/// API key prefix
-const API_KEY_PREFIX: &str = "usk_";
 
 // ============================================================================
 // Row Mapping Helpers
@@ -108,16 +101,16 @@ fn check_ownership(
 
 /// Generate a random short code using nanoid
 pub fn generate_short_code(length: usize) -> String {
-    nanoid!(length, &ALPHABET)
+    nanoid!(length, &SHORT_CODE_ALPHABET)
 }
 
 /// Generate a new API key with the usk_ prefix
 pub fn generate_api_key() -> String {
     let mut rng = rand::thread_rng();
-    let key: String = (0..32)
+    let key: String = (0..API_KEY_RANDOM_LENGTH)
         .map(|_| {
-            let idx = rng.gen_range(0..ALPHABET.len());
-            ALPHABET[idx]
+            let idx = rng.gen_range(0..SHORT_CODE_ALPHABET.len());
+            SHORT_CODE_ALPHABET[idx]
         })
         .collect();
     format!("{}{}", API_KEY_PREFIX, key)
@@ -166,7 +159,7 @@ pub fn register_user(pool: &DbPool, email: &str) -> Result<(User, String), AppEr
 
     conn.execute(
         ApiKeys::INSERT,
-        params![user_id, key_hash, "Default key"],
+        params![user_id, key_hash, DEFAULT_API_KEY_NAME],
     )?;
 
     log::info!("Registered new user: {} (ID: {})", email, user_id);
@@ -584,7 +577,7 @@ pub fn list_urls(pool: &DbPool, user_id: i64, query: &ListUrlsQuery) -> Result<V
     let conn = get_conn(pool)?;
 
     let page = query.page.unwrap_or(1).max(1);
-    let limit = query.limit.unwrap_or(20).min(100);
+    let limit = query.limit.unwrap_or(DEFAULT_PAGE_LIMIT).min(MAX_PAGE_LIMIT);
     let offset = (page - 1) * limit;
     let sort_order = match query.sort.as_deref() {
         Some("asc") => "ASC",
@@ -1139,14 +1132,7 @@ pub fn get_urls_by_tag_with_tags(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::db::{init_pool, run_migrations};
-
-    fn setup_test_db() -> DbPool {
-        // Use shared cache mode so all connections share the same in-memory database
-        let pool = init_pool("file::memory:?cache=shared").unwrap();
-        run_migrations(&pool).unwrap();
-        pool
-    }
+    use crate::test_utils::setup_test_db;
 
     #[test]
     fn test_generate_short_code() {

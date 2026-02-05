@@ -48,6 +48,72 @@ impl fmt::Display for AppError {
 
 impl std::error::Error for AppError {}
 
+// ============================================================================
+// Constructor Methods
+// ============================================================================
+
+impl AppError {
+    /// Create a NotFound error for a URL
+    pub fn url_not_found(short_code: &str) -> Self {
+        AppError::NotFound(format!("URL with code '{}' not found", short_code))
+    }
+
+    /// Create a NotFound error for a URL by ID
+    pub fn url_not_found_by_id(id: i64) -> Self {
+        AppError::NotFound(format!("URL with ID '{}' not found", id))
+    }
+
+    /// Create a NotFound error for a user
+    pub fn user_not_found(user_id: i64) -> Self {
+        AppError::NotFound(format!("User with ID '{}' not found", user_id))
+    }
+
+    /// Create a NotFound error for a tag
+    pub fn tag_not_found(tag_id: i64) -> Self {
+        AppError::NotFound(format!("Tag with ID '{}' not found", tag_id))
+    }
+
+    /// Create an ExpiredUrl error
+    pub fn url_expired(short_code: &str) -> Self {
+        AppError::ExpiredUrl(format!("URL '{}' has expired", short_code))
+    }
+
+    /// Create a DuplicateCode error
+    pub fn duplicate_code(code: &str) -> Self {
+        AppError::DuplicateCode(format!("Short code '{}' already exists", code))
+    }
+
+    /// Create an Unauthorized error for invalid API key
+    pub fn invalid_api_key() -> Self {
+        AppError::Unauthorized("Invalid API key".into())
+    }
+
+    /// Create an Unauthorized error for missing API key
+    pub fn missing_api_key() -> Self {
+        AppError::Unauthorized(
+            "Missing API key. Provide via 'Authorization: Bearer <key>' or 'X-API-Key: <key>' header".into()
+        )
+    }
+
+    /// Create a Forbidden error for resource ownership violation
+    pub fn not_owner(resource_type: &str) -> Self {
+        AppError::Forbidden(format!(
+            "You do not have permission to access this {}",
+            resource_type
+        ))
+    }
+
+    /// Create a ValidationError with a message
+    pub fn validation(message: impl Into<String>) -> Self {
+        AppError::ValidationError(message.into())
+    }
+
+    /// Create an InternalError with a message
+    pub fn internal(message: impl Into<String>) -> Self {
+        AppError::InternalError(message.into())
+    }
+}
+
 impl ResponseError for AppError {
     fn status_code(&self) -> StatusCode {
         match self {
@@ -161,5 +227,67 @@ mod tests {
             let response = err.error_response();
             assert!(response.status().is_client_error() || response.status().is_server_error());
         }
+    }
+
+    #[test]
+    fn test_constructor_methods() {
+        // Test all constructor methods produce correct error types
+        assert!(matches!(
+            AppError::url_not_found("abc123"),
+            AppError::NotFound(_)
+        ));
+        assert!(matches!(
+            AppError::url_not_found_by_id(123),
+            AppError::NotFound(_)
+        ));
+        assert!(matches!(
+            AppError::user_not_found(456),
+            AppError::NotFound(_)
+        ));
+        assert!(matches!(
+            AppError::tag_not_found(789),
+            AppError::NotFound(_)
+        ));
+        assert!(matches!(
+            AppError::url_expired("abc123"),
+            AppError::ExpiredUrl(_)
+        ));
+        assert!(matches!(
+            AppError::duplicate_code("test"),
+            AppError::DuplicateCode(_)
+        ));
+        assert!(matches!(
+            AppError::invalid_api_key(),
+            AppError::Unauthorized(_)
+        ));
+        assert!(matches!(
+            AppError::missing_api_key(),
+            AppError::Unauthorized(_)
+        ));
+        assert!(matches!(
+            AppError::not_owner("URL"),
+            AppError::Forbidden(_)
+        ));
+        assert!(matches!(
+            AppError::validation("test"),
+            AppError::ValidationError(_)
+        ));
+        assert!(matches!(
+            AppError::internal("test"),
+            AppError::InternalError(_)
+        ));
+    }
+
+    #[test]
+    fn test_constructor_messages() {
+        // Verify constructors produce expected messages
+        let err = AppError::url_not_found("abc123");
+        assert!(err.to_string().contains("abc123"));
+
+        let err = AppError::url_not_found_by_id(123);
+        assert!(err.to_string().contains("123"));
+
+        let err = AppError::duplicate_code("mycode");
+        assert!(err.to_string().contains("mycode"));
     }
 }
