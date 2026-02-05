@@ -15,6 +15,7 @@ A fast, lightweight URL shortener built with **Rust**, **Actix-web**, and **SQLi
 - 📦 **Bulk operations** - create or delete up to 100 URLs in a single request
 - 🏷️ **Tags/Categories** - organize URLs with user-defined tags
 - 🛡️ **Rate limiting** - 60 requests/minute per IP to prevent abuse
+- ⚡ **In-memory caching** - moka-based caching for URL redirects and API key validation
 - 🚀 **Blazing fast** - built with Rust and Actix-web
 - 💾 **SQLite storage** - no database server required
 - ⚡ **WAL mode** - SQLite Write-Ahead Logging for better concurrency
@@ -35,7 +36,8 @@ This project demonstrates:
 9. **Transactions** - Atomic operations for data consistency
 10. **Authentication** - Per-user API key authentication with SHA-256 hashing
 11. **Authorization** - Resource ownership and access control
-12. **Testing** - Unit and integration tests
+12. **Caching** - In-memory caching with TTL and automatic invalidation
+13. **Testing** - Unit and integration tests
 
 ## Project Structure
 
@@ -50,6 +52,7 @@ url-shortener/
     ├── main.rs             # Application entry point and server setup
     ├── config.rs           # Configuration management
     ├── db.rs               # Database pool, WAL configuration, and migrations
+    ├── cache.rs            # In-memory caching for URLs and API keys
     ├── models.rs           # Data structures and DTOs
     ├── errors.rs           # Custom error types and HTTP response mapping
     ├── queries.rs          # SQL query constants
@@ -568,6 +571,41 @@ The API is protected by rate limiting to prevent abuse:
 - **Burst:** Up to 60 requests allowed in a burst
 - **Response:** Returns `429 Too Many Requests` when limit is exceeded
 
+## Caching
+
+The application uses in-memory caching (via `moka`) to optimize the two most frequently accessed operations:
+
+### Cached Operations
+
+| Operation | Cache Key | TTL | Max Capacity |
+|-----------|-----------|-----|--------------|
+| URL redirects (`GET /{short_code}`) | `short_code` | 5 min | 10,000 |
+| API key validation | `key_hash` | 10 min | 1,000 |
+
+### Cache Behavior
+
+- **Cache Miss**: On first access, data is fetched from the database and stored in cache
+- **Cache Hit**: Subsequent requests are served from cache without database queries
+- **Automatic Expiration**: Entries expire after their TTL (time-to-live)
+- **Memory Bounded**: Cache evicts oldest entries when max capacity is reached
+
+### Cache Invalidation
+
+The cache is automatically invalidated when data changes:
+
+| Operation | Invalidation |
+|-----------|--------------|
+| URL deleted | Cache entry for that `short_code` removed |
+| Bulk URL delete | All affected `short_code` entries removed |
+| API key revoked | Cache entry for that `key_hash` removed |
+| URL expired | Detected on cache hit, entry removed |
+
+### Performance Benefits
+
+- **Reduced database load**: Hot URLs and frequently-used API keys are served from memory
+- **Lower latency**: Cache hits avoid database round-trips
+- **Lock-free concurrency**: `moka` provides thread-safe access without locks
+
 ## Database Schema
 
 The application uses SQLite with six tables:
@@ -639,6 +677,10 @@ Environment variables (set in `.env` file):
 | `BASE_URL` | `http://localhost:8080` | Base URL for generated short links |
 | `SHORT_CODE_LENGTH` | `7` | Length of auto-generated codes |
 | `RUST_LOG` | `info` | Logging level (debug, info, warn, error) |
+| `URL_CACHE_TTL_SECS` | `300` | URL cache time-to-live in seconds (5 min) |
+| `URL_CACHE_MAX_CAPACITY` | `10000` | Maximum number of URLs to cache |
+| `API_KEY_CACHE_TTL_SECS` | `600` | API key cache time-to-live in seconds (10 min) |
+| `API_KEY_CACHE_MAX_CAPACITY` | `1000` | Maximum number of API keys to cache |
 
 ## Testing with cURL
 
@@ -751,7 +793,7 @@ Here are some ideas for extending this project:
 5. **Search** - Search URLs by original URL or code
 6. ~~**Tags/Categories** - Organize URLs with tags~~ ✅ Done!
 7. **Web UI** - Add a frontend with HTML templates or SPA
-8. **Caching** - Add Redis or in-memory caching for hot URLs
+8. ~~**Caching** - Add Redis or in-memory caching for hot URLs~~ ✅ Done!
 9. **Metrics** - Add Prometheus metrics for monitoring
 10. **Docker Support** - Add Dockerfile and docker-compose for deployment
 
@@ -775,6 +817,7 @@ Here are some ideas for extending this project:
 | `lazy_static` | Lazy static initialization |
 | `sha2` | SHA-256 hashing for API keys |
 | `rand` | Random generation for API keys |
+| `moka` | In-memory caching with TTL support |
 
 ## License
 
