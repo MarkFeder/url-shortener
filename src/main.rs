@@ -48,6 +48,21 @@ async fn main() -> std::io::Result<()> {
     // Run database migrations
     db::run_migrations(&pool).expect("Failed to run database migrations");
 
+    // Run click log retention cleanup if configured
+    if let Some(retention_days) = config.click_retention_days {
+        match services::cleanup_old_click_logs(&pool, retention_days) {
+            Ok(deleted) => {
+                if deleted > 0 {
+                    info!(
+                        "Click log retention cleanup: removed {} entries older than {} days",
+                        deleted, retention_days
+                    );
+                }
+            }
+            Err(e) => log::warn!("Failed to run click log retention cleanup: {}", e),
+        }
+    }
+
     // Initialize cache
     let app_cache = cache::AppCache::new(
         config.url_cache_ttl_secs,

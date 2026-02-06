@@ -127,6 +127,51 @@ pub fn run_migrations(pool: &DbPool) -> Result<(), AppError> {
         }
     }
 
+    // Migration: Add new click tracking columns to click_logs
+    let click_log_columns = [
+        ("browser", Schema::ADD_BROWSER_TO_CLICK_LOGS),
+        ("browser_version", Schema::ADD_BROWSER_VERSION_TO_CLICK_LOGS),
+        ("os", Schema::ADD_OS_TO_CLICK_LOGS),
+        ("device_type", Schema::ADD_DEVICE_TYPE_TO_CLICK_LOGS),
+        ("referer_domain", Schema::ADD_REFERER_DOMAIN_TO_CLICK_LOGS),
+    ];
+
+    for (column_name, alter_sql) in &click_log_columns {
+        let has_column: i32 = conn
+            .query_row(Schema::COLUMN_EXISTS, ["click_logs", column_name], |row| {
+                row.get(0)
+            })
+            .unwrap_or(0);
+
+        if has_column == 0 {
+            match conn.execute(alter_sql, []) {
+                Ok(_) => log::info!("Added {} column to click_logs table", column_name),
+                Err(e) => {
+                    if !e.to_string().contains("duplicate column") {
+                        return Err(AppError::DatabaseError(format!(
+                            "Failed to add {} column: {}",
+                            column_name, e
+                        )));
+                    }
+                }
+            }
+        }
+    }
+
+    // Create indexes on click_logs for analytics performance
+    conn.execute(Schema::CREATE_CLICK_LOGS_URL_ID_INDEX, [])
+        .map_err(|e| {
+            AppError::DatabaseError(format!("Failed to create click_logs url_id index: {}", e))
+        })?;
+
+    conn.execute(Schema::CREATE_CLICK_LOGS_URL_ID_CLICKED_AT_INDEX, [])
+        .map_err(|e| {
+            AppError::DatabaseError(format!(
+                "Failed to create click_logs url_id_clicked_at index: {}",
+                e
+            ))
+        })?;
+
     log::info!("Database migrations completed successfully");
     Ok(())
 }
@@ -220,5 +265,46 @@ mod tests {
             assert!(conn.is_ok());
             connections.push(conn.unwrap());
         }
+    }
+
+    #[test]
+    fn test_click_logs_new_columns_exist() {
+        let pool = init_pool("file::memory:?cache=shared").expect("Should create in-memory pool");
+        run_migrations(&pool).expect("Should run migrations");
+
+        let conn = pool.get().expect("Should get connection");
+
+        for column in &["browser", "browser_version", "os", "device_type", "referer_domain"] {
+            let has_column: i32 = conn
+                .query_row(Schema::COLUMN_EXISTS, ["click_logs", column], |row| row.get(0))
+                .expect("Should query column existence");
+            assert_eq!(has_column, 1, "Column {} should exist in click_logs", column);
+        }
+    }
+
+    #[test]
+    fn test_click_logs_indexes_created() {
+        let pool = init_pool("file::memory:?cache=shared").expect("Should create in-memory pool");
+        run_migrations(&pool).expect("Should run migrations");
+
+        let conn = pool.get().expect("Should get connection");
+
+        let idx_count: i32 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='index' AND name='idx_click_logs_url_id'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("Should query index");
+        assert_eq!(idx_count, 1, "idx_click_logs_url_id should exist");
+
+        let idx_count2: i32 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='index' AND name='idx_click_logs_url_id_clicked_at'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("Should query index");
+        assert_eq!(idx_count2, 1, "idx_click_logs_url_id_clicked_at should exist");
     }
 }

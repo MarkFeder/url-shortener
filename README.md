@@ -7,8 +7,9 @@ A fast, lightweight URL shortener built with **Rust**, **Actix-web**, and **SQLi
 - ✨ **Create short URLs** from long URLs
 - 🎯 **Custom short codes** - use your own memorable codes
 - ⏰ **Expiring URLs** - set expiration time in hours
-- 📊 **Click tracking** - track how many times each URL is accessed
-- 📈 **Analytics** - view click logs with IP, user agent, and referer
+- 📊 **Click tracking** - track clicks with parsed browser, OS, device type, and referer domain
+- 📈 **Analytics** - view click logs, timeline charts, referrer/browser/device breakdowns
+- 🔧 **Configurable click logging** - enable/disable logging, set retention period
 - 🔐 **Per-user authentication** - email registration with API key management
 - 🔑 **Multiple API keys** - create, list, and revoke API keys per user
 - 👤 **URL ownership** - users can only access their own URLs
@@ -46,9 +47,11 @@ This project demonstrates:
 15. **Query Optimization** - Avoiding N+1 queries with batch loading patterns
 16. **Code Organization** - Row mapping helpers and reusable ownership checks
 17. **Containerization** - Multi-stage Docker builds and docker-compose
-18. **Testing** - Unit and integration tests (127+ tests) with shared test utilities
+18. **Testing** - Unit and integration tests (148 tests) with shared test utilities
 19. **Constants Management** - Centralized magic numbers and configuration defaults
 20. **Error Constructors** - Domain-specific error factory methods for cleaner code
+21. **User-Agent Parsing** - Extracting browser, OS, and device type from UA strings with woothee
+22. **Aggregated Analytics** - SQL GROUP BY queries for timeline and breakdown reports
 
 ## Project Structure
 
@@ -354,8 +357,116 @@ X-API-Key: usk_your_key_here
             "clicked_at": "2024-01-15 08:30:00",
             "ip_address": "192.168.1.1",
             "user_agent": "Mozilla/5.0...",
-            "referer": "https://google.com"
+            "referer": "https://google.com",
+            "browser": "Chrome",
+            "browser_version": "120.0.0.0",
+            "os": "Windows 10",
+            "device_type": "desktop",
+            "referer_domain": "google.com"
         }
+    ]
+}
+```
+
+---
+
+### Click Timeline (Authenticated)
+
+Get aggregated click counts grouped by time period.
+
+```bash
+GET /api/urls/{id}/analytics/timeline?period=daily&limit=7
+X-API-Key: usk_your_key_here
+```
+
+**Query Parameters:**
+- `period`: `hourly`, `daily` (default), or `weekly`
+- `limit`: Maximum buckets to return (default: 30, max: 100)
+
+**Response (200 OK):**
+```json
+{
+    "period": "daily",
+    "data": [
+        { "bucket": "2024-01-15", "count": 42 },
+        { "bucket": "2024-01-14", "count": 38 },
+        { "bucket": "2024-01-13", "count": 25 }
+    ]
+}
+```
+
+---
+
+### Referrer Breakdown (Authenticated)
+
+Get top referring domains for a URL.
+
+```bash
+GET /api/urls/{id}/analytics/referrers?limit=10
+X-API-Key: usk_your_key_here
+```
+
+**Query Parameters:**
+- `limit`: Maximum entries (default: 20, max: 100)
+
+**Response (200 OK):**
+```json
+{
+    "data": [
+        { "name": "google.com", "count": 85 },
+        { "name": "twitter.com", "count": 32 },
+        { "name": "direct", "count": 18 }
+    ]
+}
+```
+
+---
+
+### Browser Breakdown (Authenticated)
+
+Get browser usage breakdown for a URL.
+
+```bash
+GET /api/urls/{id}/analytics/browsers?limit=10
+X-API-Key: usk_your_key_here
+```
+
+**Query Parameters:**
+- `limit`: Maximum entries (default: 20, max: 100)
+
+**Response (200 OK):**
+```json
+{
+    "data": [
+        { "name": "Chrome", "count": 120 },
+        { "name": "Firefox", "count": 45 },
+        { "name": "Safari", "count": 30 }
+    ]
+}
+```
+
+---
+
+### Device Breakdown (Authenticated)
+
+Get device type breakdown for a URL.
+
+```bash
+GET /api/urls/{id}/analytics/devices?limit=10
+X-API-Key: usk_your_key_here
+```
+
+**Query Parameters:**
+- `limit`: Maximum entries (default: 20, max: 100)
+
+**Response (200 OK):**
+```json
+{
+    "data": [
+        { "name": "desktop", "count": 150 },
+        { "name": "mobile", "count": 80 },
+        { "name": "bot", "count": 12 },
+        { "name": "other", "count": 3 }
     ]
 }
 ```
@@ -789,15 +900,20 @@ The application uses SQLite with six tables:
 | `expires_at` | TEXT | Optional expiration timestamp |
 | `user_id` | INTEGER | Foreign key to users (owner) |
 
-**click_logs** - Stores click analytics
+**click_logs** - Stores click analytics (indexed on `url_id` and `url_id, clicked_at`)
 | Column | Type | Description |
 |--------|------|-------------|
 | `id` | INTEGER | Primary key |
 | `url_id` | INTEGER | Foreign key to urls |
 | `clicked_at` | TEXT | Click timestamp |
 | `ip_address` | TEXT | Visitor IP address |
-| `user_agent` | TEXT | Browser user agent |
-| `referer` | TEXT | Referring URL |
+| `user_agent` | TEXT | Raw browser user agent |
+| `referer` | TEXT | Raw referring URL |
+| `browser` | TEXT | Parsed browser name (e.g., Chrome, Firefox) |
+| `browser_version` | TEXT | Parsed browser version |
+| `os` | TEXT | Parsed operating system (e.g., Windows 10) |
+| `device_type` | TEXT | Device category: desktop, mobile, bot, other |
+| `referer_domain` | TEXT | Extracted domain from referer URL |
 
 **tags** - Stores user-defined tags
 | Column | Type | Description |
@@ -831,6 +947,8 @@ Environment variables (set in `.env` file):
 | `API_KEY_CACHE_TTL_SECS` | `600` | API key cache time-to-live in seconds (10 min) |
 | `API_KEY_CACHE_MAX_CAPACITY` | `1000` | Maximum number of API keys to cache |
 | `METRICS_ENABLED` | `true` | Enable Prometheus metrics endpoint at /metrics |
+| `CLICK_LOGGING_ENABLED` | `true` | Enable/disable click logging on redirects |
+| `CLICK_RETENTION_DAYS` | *(none)* | Auto-delete click logs older than N days at startup |
 
 ## Docker
 
@@ -1091,6 +1209,7 @@ Here are some ideas for extending this project:
 | `prometheus` | Prometheus metrics library |
 | `qrcode` | QR code generation |
 | `image` | Image encoding (PNG) for QR codes |
+| `woothee` | User-agent parsing (browser, OS, device type) |
 
 ## License
 

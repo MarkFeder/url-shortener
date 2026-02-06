@@ -61,6 +61,44 @@ pub fn create_test_url(
         .expect("Failed to create test URL")
 }
 
+/// Record a single test click with specific parameters.
+pub fn record_test_click(
+    pool: &DbPool,
+    url_id: i64,
+    user_agent: Option<&str>,
+    referer: Option<&str>,
+) {
+    crate::services::record_click(pool, url_id, Some("127.0.0.1"), user_agent, referer)
+        .expect("Failed to record test click");
+}
+
+/// Record varied test clicks with diverse UA/referer data.
+pub fn record_varied_test_clicks(pool: &DbPool, url_id: i64) {
+    let clicks = [
+        (
+            Some("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"),
+            Some("https://google.com/search?q=test"),
+        ),
+        (
+            Some("Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1"),
+            Some("https://twitter.com/post/123"),
+        ),
+        (
+            Some("Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)"),
+            None,
+        ),
+        (
+            Some("Mozilla/5.0 (X11; Linux x86_64; rv:109.0) Gecko/20100101 Firefox/120.0"),
+            Some("https://google.com/search?q=other"),
+        ),
+        (None, None),
+    ];
+
+    for (ua, referer) in clicks {
+        record_test_click(pool, url_id, ua, referer);
+    }
+}
+
 /// Extension trait for test assertions.
 pub trait TestAssertions {
     /// Assert that a result is Ok.

@@ -5,7 +5,7 @@
 use serde::{Deserialize, Serialize};
 use validator::Validate;
 
-use crate::constants::{DEFAULT_PAGE_LIMIT, DEFAULT_SORT_ORDER};
+use crate::constants::{DEFAULT_ANALYTICS_PERIOD, DEFAULT_PAGE_LIMIT, DEFAULT_SORT_ORDER};
 
 // ============================================================================
 // Database Models
@@ -47,6 +47,16 @@ pub struct ClickLog {
     pub user_agent: Option<String>,
     /// Referer header
     pub referer: Option<String>,
+    /// Parsed browser name
+    pub browser: Option<String>,
+    /// Parsed browser version
+    pub browser_version: Option<String>,
+    /// Parsed operating system
+    pub os: Option<String>,
+    /// Device type (desktop, mobile, bot, other)
+    pub device_type: Option<String>,
+    /// Extracted referer domain
+    pub referer_domain: Option<String>,
 }
 
 /// Represents a user in the database
@@ -413,6 +423,83 @@ pub struct QrCodeQuery {
     pub format: Option<String>,
     /// Size in pixels (default: 256, min: 64, max: 1024)
     pub size: Option<u32>,
+}
+
+/// Query parameters for analytics timeline endpoint
+#[derive(Debug, Clone, Deserialize)]
+pub struct TimelineQuery {
+    /// Period: "hourly", "daily", or "weekly"
+    pub period: Option<String>,
+    /// Maximum number of buckets to return
+    pub limit: Option<u32>,
+}
+
+impl Default for TimelineQuery {
+    fn default() -> Self {
+        Self {
+            period: Some(DEFAULT_ANALYTICS_PERIOD.to_string()),
+            limit: Some(30),
+        }
+    }
+}
+
+/// Query parameters for breakdown analytics endpoints
+#[derive(Debug, Clone, Deserialize)]
+pub struct BreakdownQuery {
+    /// Maximum number of entries to return
+    pub limit: Option<u32>,
+}
+
+// ============================================================================
+// Analytics Response DTOs
+// ============================================================================
+
+/// A single time bucket in a timeline
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TimelineBucket {
+    /// The time bucket label
+    pub bucket: String,
+    /// Number of clicks in this bucket
+    pub count: i64,
+}
+
+/// Response for the timeline analytics endpoint
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TimelineResponse {
+    /// The period used (hourly, daily, weekly)
+    pub period: String,
+    /// The timeline data
+    pub data: Vec<TimelineBucket>,
+}
+
+/// A single entry in a breakdown
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BreakdownEntry {
+    /// The name/label of this entry
+    pub name: String,
+    /// The count for this entry
+    pub count: i64,
+}
+
+/// Response for the referrer breakdown endpoint
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReferrerBreakdownResponse {
+    /// Referrer breakdown data
+    pub data: Vec<BreakdownEntry>,
+}
+
+/// Response for the browser breakdown endpoint
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BrowserBreakdownResponse {
+    /// Browser breakdown data
+    pub data: Vec<BreakdownEntry>,
+}
+
+/// Response for the device breakdown endpoint
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DeviceBreakdownResponse {
+    /// Device breakdown data
+    pub data: Vec<BreakdownEntry>,
 }
 
 // ============================================================================

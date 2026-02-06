@@ -39,6 +39,7 @@ actix-web-prom = "0.9"   # Prometheus metrics middleware
 prometheus = "0.13"       # Prometheus metrics
 qrcode = "0.14"           # QR code generation
 image = "0.25"            # Image encoding for QR codes
+woothee = "0.13"          # User-agent parsing
 
 [dev-dependencies]
 actix-rt = "2"

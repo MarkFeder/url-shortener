@@ -27,6 +27,10 @@ pub struct Config {
     pub api_key_cache_max_capacity: u64,
     /// Enable Prometheus metrics endpoint
     pub metrics_enabled: bool,
+    /// Whether click logging is enabled
+    pub click_logging_enabled: bool,
+    /// Optional retention period for click logs in days
+    pub click_retention_days: Option<u64>,
 }
 
 impl Config {
@@ -82,6 +86,13 @@ impl Config {
                 .unwrap_or_else(|_| "true".to_string())
                 .parse()
                 .unwrap_or(true),
+            click_logging_enabled: env::var("CLICK_LOGGING_ENABLED")
+                .unwrap_or_else(|_| "true".to_string())
+                .parse()
+                .unwrap_or(true),
+            click_retention_days: env::var("CLICK_RETENTION_DAYS")
+                .ok()
+                .and_then(|v| v.parse().ok()),
         }
     }
 }
@@ -99,6 +110,8 @@ impl Default for Config {
             api_key_cache_ttl_secs: 600,
             api_key_cache_max_capacity: 1_000,
             metrics_enabled: true,
+            click_logging_enabled: true,
+            click_retention_days: None,
         }
     }
 }
@@ -114,5 +127,12 @@ mod tests {
         assert_eq!(config.host, "127.0.0.1");
         assert_eq!(config.port, 8080);
         assert_eq!(config.short_code_length, 7);
+    }
+
+    #[test]
+    fn test_default_click_tracking_config() {
+        let config = Config::default();
+        assert!(config.click_logging_enabled);
+        assert_eq!(config.click_retention_days, None);
     }
 }

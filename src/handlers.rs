@@ -8,16 +8,18 @@ use validator::Validate;
 use crate::auth::AuthenticatedUser;
 use crate::cache::AppCache;
 use crate::config::Config;
-use crate::constants::{DEFAULT_PAGE_LIMIT, DEFAULT_QR_SIZE, MAX_PAGE_LIMIT, MAX_QR_SIZE, MIN_QR_SIZE};
+use crate::constants::{DEFAULT_PAGE_LIMIT, DEFAULT_QR_SIZE, MAX_ANALYTICS_RESULTS, MAX_PAGE_LIMIT, MAX_QR_SIZE, MIN_QR_SIZE};
 use crate::db::DbPool;
 use crate::errors::AppError;
 use crate::metrics::AppMetrics;
 use crate::models::{
-    AddTagToUrlRequest, ApiKeyListResponse, ApiKeyResponse, BulkCreateUrlRequest,
-    BulkDeleteUrlRequest, BulkOperationStatus, CreateApiKeyRequest, CreateApiKeyResponse,
-    CreateTagRequest, CreateUrlRequest, CreateUrlResponse, ListUrlsQuery, MessageResponse,
-    QrCodeQuery, RegisterRequest, RegisterResponse, SearchUrlsQuery, TagListResponse,
-    TagResponse, UrlListResponse, UrlResponse, UrlWithTagsResponse, UrlsByTagResponse,
+    AddTagToUrlRequest, ApiKeyListResponse, ApiKeyResponse, BreakdownQuery,
+    BrowserBreakdownResponse, BulkCreateUrlRequest, BulkDeleteUrlRequest, BulkOperationStatus,
+    CreateApiKeyRequest, CreateApiKeyResponse, CreateTagRequest, CreateUrlRequest,
+    CreateUrlResponse, DeviceBreakdownResponse, ListUrlsQuery, MessageResponse, QrCodeQuery,
+    ReferrerBreakdownResponse, RegisterRequest, RegisterResponse, SearchUrlsQuery, TagListResponse,
+    TagResponse, TimelineQuery, TimelineResponse, UrlListResponse, UrlResponse,
+    UrlWithTagsResponse, UrlsByTagResponse,
 };
 use crate::qr::{self, QrFormat, QrOptions};
 use crate::services;
@@ -50,6 +52,10 @@ pub fn configure_routes(cfg: &mut web::ServiceConfig) {
             .service(list_urls)
             .service(get_url_by_id)
             .service(delete_url_by_id)
+            .service(get_url_analytics_timeline)
+            .service(get_url_analytics_referrers)
+            .service(get_url_analytics_browsers)
+            .service(get_url_analytics_devices)
             .service(get_url_stats)
             .service(get_url_qr_code),
     )
@@ -768,6 +774,118 @@ async fn get_urls_by_tag(
 }
 
 // ============================================================================
+// Analytics Endpoints
+// ============================================================================
+
+/// Get click timeline for a URL
+///
+/// # Path Parameters
+/// - `id`: The URL ID
+///
+/// # Query Parameters
+/// - `period`: "hourly", "daily" (default), or "weekly"
+/// - `limit`: Maximum buckets to return (default: 30, max: 100)
+#[get("/urls/{id}/analytics/timeline")]
+async fn get_url_analytics_timeline(
+    user: AuthenticatedUser,
+    pool: web::Data<DbPool>,
+    path: web::Path<i64>,
+    query: web::Query<TimelineQuery>,
+) -> Result<HttpResponse, AppError> {
+    let id = path.into_inner();
+
+    // Verify URL ownership
+    services::get_url_by_id(&pool, id, user.user_id)?;
+
+    let period = query.period.as_deref().unwrap_or("daily");
+    if !["hourly", "daily", "weekly"].contains(&period) {
+        return Err(AppError::ValidationError(
+            "Invalid period. Must be one of: hourly, daily, weekly".into(),
+        ));
+    }
+
+    let limit = query.limit.unwrap_or(30).min(MAX_ANALYTICS_RESULTS);
+
+    let data = services::get_click_timeline(&pool, id, period, limit)?;
+
+    let response = TimelineResponse {
+        period: period.to_string(),
+        data,
+    };
+
+    Ok(HttpResponse::Ok().json(response))
+}
+
+/// Get referrer breakdown for a URL
+///
+/// # Path Parameters
+/// - `id`: The URL ID
+///
+/// # Query Parameters
+/// - `limit`: Maximum entries (default: 20, max: 100)
+#[get("/urls/{id}/analytics/referrers")]
+async fn get_url_analytics_referrers(
+    user: AuthenticatedUser,
+    pool: web::Data<DbPool>,
+    path: web::Path<i64>,
+    query: web::Query<BreakdownQuery>,
+) -> Result<HttpResponse, AppError> {
+    let id = path.into_inner();
+    services::get_url_by_id(&pool, id, user.user_id)?;
+
+    let limit = query.limit.unwrap_or(20).min(MAX_ANALYTICS_RESULTS);
+    let data = services::get_referrer_breakdown(&pool, id, limit)?;
+
+    Ok(HttpResponse::Ok().json(ReferrerBreakdownResponse { data }))
+}
+
+/// Get browser breakdown for a URL
+///
+/// # Path Parameters
+/// - `id`: The URL ID
+///
+/// # Query Parameters
+/// - `limit`: Maximum entries (default: 20, max: 100)
+#[get("/urls/{id}/analytics/browsers")]
+async fn get_url_analytics_browsers(
+    user: AuthenticatedUser,
+    pool: web::Data<DbPool>,
+    path: web::Path<i64>,
+    query: web::Query<BreakdownQuery>,
+) -> Result<HttpResponse, AppError> {
+    let id = path.into_inner();
+    services::get_url_by_id(&pool, id, user.user_id)?;
+
+    let limit = query.limit.unwrap_or(20).min(MAX_ANALYTICS_RESULTS);
+    let data = services::get_browser_breakdown(&pool, id, limit)?;
+
+    Ok(HttpResponse::Ok().json(BrowserBreakdownResponse { data }))
+}
+
+/// Get device breakdown for a URL
+///
+/// # Path Parameters
+/// - `id`: The URL ID
+///
+/// # Query Parameters
+/// - `limit`: Maximum entries (default: 20, max: 100)
+#[get("/urls/{id}/analytics/devices")]
+async fn get_url_analytics_devices(
+    user: AuthenticatedUser,
+    pool: web::Data<DbPool>,
+    path: web::Path<i64>,
+    query: web::Query<BreakdownQuery>,
+) -> Result<HttpResponse, AppError> {
+    let id = path.into_inner();
+    services::get_url_by_id(&pool, id, user.user_id)?;
+
+    let limit = query.limit.unwrap_or(20).min(MAX_ANALYTICS_RESULTS);
+    let data = services::get_device_breakdown(&pool, id, limit)?;
+
+    Ok(HttpResponse::Ok().json(DeviceBreakdownResponse { data }))
+}
+
+// ============================================================================
 // Redirect Endpoint
 // ============================================================================
 
@@ -787,6 +905,7 @@ async fn get_urls_by_tag(
 async fn redirect_to_url(
     pool: web::Data<DbPool>,
     cache: web::Data<AppCache>,
+    config: web::Data<Config>,
     metrics: Option<web::Data<AppMetrics>>,
     path: web::Path<String>,
     req: HttpRequest,
@@ -823,14 +942,16 @@ async fn redirect_to_url(
         .and_then(|h| h.to_str().ok())
         .map(|s| s.to_string());
 
-    // Record the click asynchronously (don't block the redirect)
-    let _ = services::record_click(
-        &pool,
-        url.id,
-        ip_address.as_deref(),
-        user_agent.as_deref(),
-        referer.as_deref(),
-    );
+    // Record the click if logging is enabled
+    if config.click_logging_enabled {
+        let _ = services::record_click(
+            &pool,
+            url.id,
+            ip_address.as_deref(),
+            user_agent.as_deref(),
+            referer.as_deref(),
+        );
+    }
 
     // Record redirect metric
     if let Some(ref m) = metrics {
@@ -1764,5 +1885,192 @@ mod tests {
         let body: UrlListResponse = test::read_body_json(resp).await;
         assert_eq!(body.total, 1);
         assert_eq!(body.urls[0].short_code, "secret2");
+    }
+
+    // ========================================================================
+    // Analytics Handler Tests
+    // ========================================================================
+
+    #[actix_rt::test]
+    async fn test_analytics_timeline_endpoint() {
+        let pool = setup_test_pool();
+
+        let (user, api_key) = services::register_user(&pool, "test@example.com").unwrap();
+
+        let request = CreateUrlRequest {
+            url: "https://example.com".to_string(),
+            custom_code: Some("analytics_tl".to_string()),
+            expires_in_hours: None,
+        };
+        let url = services::create_url(&pool, &request, 7, user.id).unwrap();
+
+        // Record some clicks
+        for _ in 0..3 {
+            services::record_click(&pool, url.id, Some("127.0.0.1"), None, None).unwrap();
+        }
+
+        let app = setup_test_app(pool).await;
+
+        let req = test::TestRequest::get()
+            .uri(&format!("/api/urls/{}/analytics/timeline?period=daily&limit=7", url.id))
+            .insert_header(("X-API-Key", api_key))
+            .to_request();
+
+        let resp: actix_web::dev::ServiceResponse = test::call_service(&app, req).await;
+        assert!(resp.status().is_success());
+
+        let body: TimelineResponse = test::read_body_json(resp).await;
+        assert_eq!(body.period, "daily");
+        assert!(!body.data.is_empty());
+        assert_eq!(body.data[0].count, 3);
+    }
+
+    #[actix_rt::test]
+    async fn test_analytics_referrers_endpoint() {
+        let pool = setup_test_pool();
+
+        let (user, api_key) = services::register_user(&pool, "test@example.com").unwrap();
+
+        let request = CreateUrlRequest {
+            url: "https://example.com".to_string(),
+            custom_code: Some("analytics_ref".to_string()),
+            expires_in_hours: None,
+        };
+        let url = services::create_url(&pool, &request, 7, user.id).unwrap();
+
+        services::record_click(&pool, url.id, None, None, Some("https://google.com/search")).unwrap();
+        services::record_click(&pool, url.id, None, None, Some("https://twitter.com/post")).unwrap();
+
+        let app = setup_test_app(pool).await;
+
+        let req = test::TestRequest::get()
+            .uri(&format!("/api/urls/{}/analytics/referrers", url.id))
+            .insert_header(("X-API-Key", api_key))
+            .to_request();
+
+        let resp: actix_web::dev::ServiceResponse = test::call_service(&app, req).await;
+        assert!(resp.status().is_success());
+
+        let body: ReferrerBreakdownResponse = test::read_body_json(resp).await;
+        assert!(!body.data.is_empty());
+    }
+
+    #[actix_rt::test]
+    async fn test_analytics_browsers_endpoint() {
+        let pool = setup_test_pool();
+
+        let (user, api_key) = services::register_user(&pool, "test@example.com").unwrap();
+
+        let request = CreateUrlRequest {
+            url: "https://example.com".to_string(),
+            custom_code: Some("analytics_br".to_string()),
+            expires_in_hours: None,
+        };
+        let url = services::create_url(&pool, &request, 7, user.id).unwrap();
+
+        let chrome_ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
+        services::record_click(&pool, url.id, None, Some(chrome_ua), None).unwrap();
+
+        let app = setup_test_app(pool).await;
+
+        let req = test::TestRequest::get()
+            .uri(&format!("/api/urls/{}/analytics/browsers", url.id))
+            .insert_header(("X-API-Key", api_key))
+            .to_request();
+
+        let resp: actix_web::dev::ServiceResponse = test::call_service(&app, req).await;
+        assert!(resp.status().is_success());
+
+        let body: BrowserBreakdownResponse = test::read_body_json(resp).await;
+        assert!(!body.data.is_empty());
+    }
+
+    #[actix_rt::test]
+    async fn test_analytics_devices_endpoint() {
+        let pool = setup_test_pool();
+
+        let (user, api_key) = services::register_user(&pool, "test@example.com").unwrap();
+
+        let request = CreateUrlRequest {
+            url: "https://example.com".to_string(),
+            custom_code: Some("analytics_dev".to_string()),
+            expires_in_hours: None,
+        };
+        let url = services::create_url(&pool, &request, 7, user.id).unwrap();
+
+        let desktop_ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
+        services::record_click(&pool, url.id, None, Some(desktop_ua), None).unwrap();
+
+        let app = setup_test_app(pool).await;
+
+        let req = test::TestRequest::get()
+            .uri(&format!("/api/urls/{}/analytics/devices", url.id))
+            .insert_header(("X-API-Key", api_key))
+            .to_request();
+
+        let resp: actix_web::dev::ServiceResponse = test::call_service(&app, req).await;
+        assert!(resp.status().is_success());
+
+        let body: DeviceBreakdownResponse = test::read_body_json(resp).await;
+        assert!(!body.data.is_empty());
+    }
+
+    #[actix_rt::test]
+    async fn test_analytics_requires_auth() {
+        let pool = setup_test_pool();
+        let app = setup_test_app(pool).await;
+
+        let endpoints = [
+            "/api/urls/1/analytics/timeline",
+            "/api/urls/1/analytics/referrers",
+            "/api/urls/1/analytics/browsers",
+            "/api/urls/1/analytics/devices",
+        ];
+
+        for endpoint in endpoints {
+            let req = test::TestRequest::get().uri(endpoint).to_request();
+            let resp: actix_web::dev::ServiceResponse = test::call_service(&app, req).await;
+            assert_eq!(resp.status(), 401, "Endpoint {} should require auth", endpoint);
+        }
+    }
+
+    #[actix_rt::test]
+    async fn test_analytics_not_found() {
+        let pool = setup_test_pool();
+        let (_, api_key) = services::register_user(&pool, "test@example.com").unwrap();
+
+        let app = setup_test_app(pool).await;
+
+        let req = test::TestRequest::get()
+            .uri("/api/urls/99999/analytics/timeline")
+            .insert_header(("X-API-Key", api_key))
+            .to_request();
+
+        let resp: actix_web::dev::ServiceResponse = test::call_service(&app, req).await;
+        assert_eq!(resp.status(), 404);
+    }
+
+    #[actix_rt::test]
+    async fn test_analytics_timeline_invalid_period() {
+        let pool = setup_test_pool();
+
+        let (user, api_key) = services::register_user(&pool, "test@example.com").unwrap();
+
+        let request = CreateUrlRequest {
+            url: "https://example.com".to_string(),
+            custom_code: Some("bad_period".to_string()),
+            expires_in_hours: None,
+        };
+        let url = services::create_url(&pool, &request, 7, user.id).unwrap();
+
+        let app = setup_test_app(pool).await;
+
+        let req = test::TestRequest::get()
+            .uri(&format!("/api/urls/{}/analytics/timeline?period=monthly", url.id))
+            .insert_header(("X-API-Key", api_key))
+            .to_request();
+
+        let resp: actix_web::dev::ServiceResponse = test::call_service(&app, req).await;
+        assert_eq!(resp.status(), 400);
     }
 }

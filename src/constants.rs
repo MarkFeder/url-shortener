@@ -100,6 +100,25 @@ pub const DEFAULT_API_KEY_NAME: &str = "Default key";
 pub const MAX_TAG_NAME_LENGTH: usize = 50;
 
 // ============================================================================
+// Click Tracking Constants
+// ============================================================================
+
+/// Whether click logging is enabled by default
+pub const DEFAULT_CLICK_LOGGING_ENABLED: bool = true;
+
+/// Default retention period for click logs (None = keep forever)
+pub const DEFAULT_CLICK_RETENTION_DAYS: Option<u64> = None;
+
+/// Default limit for recent clicks in stats endpoint
+pub const DEFAULT_RECENT_CLICKS_LIMIT: u32 = 50;
+
+/// Maximum results for analytics endpoints
+pub const MAX_ANALYTICS_RESULTS: u32 = 100;
+
+/// Default analytics timeline period
+pub const DEFAULT_ANALYTICS_PERIOD: &str = "daily";
+
+// ============================================================================
 // Test Constants
 // ============================================================================
 

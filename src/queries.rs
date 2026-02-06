@@ -30,8 +30,34 @@ impl Schema {
             ip_address      TEXT,
             user_agent      TEXT,
             referer         TEXT,
+            browser         TEXT,
+            browser_version TEXT,
+            os              TEXT,
+            device_type     TEXT,
+            referer_domain  TEXT,
             FOREIGN KEY (url_id) REFERENCES urls (id) ON DELETE CASCADE
         )";
+
+    pub const ADD_BROWSER_TO_CLICK_LOGS: &'static str =
+        "ALTER TABLE click_logs ADD COLUMN browser TEXT";
+
+    pub const ADD_BROWSER_VERSION_TO_CLICK_LOGS: &'static str =
+        "ALTER TABLE click_logs ADD COLUMN browser_version TEXT";
+
+    pub const ADD_OS_TO_CLICK_LOGS: &'static str =
+        "ALTER TABLE click_logs ADD COLUMN os TEXT";
+
+    pub const ADD_DEVICE_TYPE_TO_CLICK_LOGS: &'static str =
+        "ALTER TABLE click_logs ADD COLUMN device_type TEXT";
+
+    pub const ADD_REFERER_DOMAIN_TO_CLICK_LOGS: &'static str =
+        "ALTER TABLE click_logs ADD COLUMN referer_domain TEXT";
+
+    pub const CREATE_CLICK_LOGS_URL_ID_INDEX: &'static str =
+        "CREATE INDEX IF NOT EXISTS idx_click_logs_url_id ON click_logs (url_id)";
+
+    pub const CREATE_CLICK_LOGS_URL_ID_CLICKED_AT_INDEX: &'static str =
+        "CREATE INDEX IF NOT EXISTS idx_click_logs_url_id_clicked_at ON click_logs (url_id, clicked_at)";
 
     pub const CREATE_USERS_TABLE: &'static str = "
         CREATE TABLE IF NOT EXISTS users (
@@ -200,14 +226,74 @@ pub struct ClickLogs;
 
 impl ClickLogs {
     pub const INSERT: &'static str =
-        "INSERT INTO click_logs (url_id, ip_address, user_agent, referer) VALUES (?1, ?2, ?3, ?4)";
+        "INSERT INTO click_logs (url_id, ip_address, user_agent, referer, browser, browser_version, os, device_type, referer_domain) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)";
 
     pub const SELECT_BY_URL_ID: &'static str = "
-        SELECT id, url_id, clicked_at, ip_address, user_agent, referer
+        SELECT id, url_id, clicked_at, ip_address, user_agent, referer,
+               browser, browser_version, os, device_type, referer_domain
         FROM click_logs
         WHERE url_id = ?1
         ORDER BY clicked_at DESC
         LIMIT ?2";
+
+    pub const TIMELINE_HOURLY: &'static str = "
+        SELECT strftime('%Y-%m-%d %H:00:00', clicked_at) AS bucket, COUNT(*) AS count
+        FROM click_logs
+        WHERE url_id = ?1
+        GROUP BY bucket
+        ORDER BY bucket DESC
+        LIMIT ?2";
+
+    pub const TIMELINE_DAILY: &'static str = "
+        SELECT strftime('%Y-%m-%d', clicked_at) AS bucket, COUNT(*) AS count
+        FROM click_logs
+        WHERE url_id = ?1
+        GROUP BY bucket
+        ORDER BY bucket DESC
+        LIMIT ?2";
+
+    pub const TIMELINE_WEEKLY: &'static str = "
+        SELECT strftime('%Y-W%W', clicked_at) AS bucket, COUNT(*) AS count
+        FROM click_logs
+        WHERE url_id = ?1
+        GROUP BY bucket
+        ORDER BY bucket DESC
+        LIMIT ?2";
+
+    pub const TOP_REFERRERS: &'static str = "
+        SELECT COALESCE(referer_domain, 'direct') AS domain, COUNT(*) AS count
+        FROM click_logs
+        WHERE url_id = ?1
+        GROUP BY domain
+        ORDER BY count DESC
+        LIMIT ?2";
+
+    pub const BROWSER_BREAKDOWN: &'static str = "
+        SELECT COALESCE(browser, 'unknown') AS name, COUNT(*) AS count
+        FROM click_logs
+        WHERE url_id = ?1
+        GROUP BY name
+        ORDER BY count DESC
+        LIMIT ?2";
+
+    pub const DEVICE_BREAKDOWN: &'static str = "
+        SELECT COALESCE(device_type, 'unknown') AS name, COUNT(*) AS count
+        FROM click_logs
+        WHERE url_id = ?1
+        GROUP BY name
+        ORDER BY count DESC
+        LIMIT ?2";
+
+    pub const OS_BREAKDOWN: &'static str = "
+        SELECT COALESCE(os, 'unknown') AS name, COUNT(*) AS count
+        FROM click_logs
+        WHERE url_id = ?1
+        GROUP BY name
+        ORDER BY count DESC
+        LIMIT ?2";
+
+    pub const DELETE_BEFORE: &'static str =
+        "DELETE FROM click_logs WHERE clicked_at < ?1";
 }
 
 /// Tag-related queries.
