@@ -2,27 +2,15 @@
 //!
 //! Defines all route handlers and configures the routing table.
 
-use actix_web::{delete, get, post, web, HttpRequest, HttpResponse};
-use validator::Validate;
+mod auth;
+mod urls;
+mod bulk;
+mod tags;
+mod analytics;
+mod redirect;
+mod health;
 
-use crate::auth::AuthenticatedUser;
-use crate::cache::AppCache;
-use crate::config::Config;
-use crate::constants::{DEFAULT_PAGE_LIMIT, DEFAULT_QR_SIZE, MAX_ANALYTICS_RESULTS, MAX_PAGE_LIMIT, MAX_QR_SIZE, MIN_QR_SIZE};
-use crate::db::DbPool;
-use crate::errors::AppError;
-use crate::metrics::AppMetrics;
-use crate::models::{
-    AddTagToUrlRequest, ApiKeyListResponse, ApiKeyResponse, BreakdownQuery,
-    BrowserBreakdownResponse, BulkCreateUrlRequest, BulkDeleteUrlRequest, BulkOperationStatus,
-    CreateApiKeyRequest, CreateApiKeyResponse, CreateTagRequest, CreateUrlRequest,
-    CreateUrlResponse, DeviceBreakdownResponse, ListUrlsQuery, MessageResponse, QrCodeQuery,
-    ReferrerBreakdownResponse, RegisterRequest, RegisterResponse, SearchUrlsQuery, TagListResponse,
-    TagResponse, TimelineQuery, TimelineResponse, UrlListResponse, UrlResponse,
-    UrlWithTagsResponse, UrlsByTagResponse,
-};
-use crate::qr::{self, QrFormat, QrOptions};
-use crate::services;
+use actix_web::web;
 
 /// Configure all application routes
 pub fn configure_routes(cfg: &mut web::ServiceConfig) {
@@ -31,970 +19,52 @@ pub fn configure_routes(cfg: &mut web::ServiceConfig) {
             // Auth routes (register is public)
             .service(
                 web::scope("/auth")
-                    .service(register)
-                    .service(create_api_key)
-                    .service(list_api_keys)
-                    .service(revoke_api_key),
+                    .service(auth::register)
+                    .service(auth::create_api_key)
+                    .service(auth::list_api_keys)
+                    .service(auth::revoke_api_key),
             )
             // Tag routes
-            .service(create_tag)
-            .service(list_tags)
-            .service(delete_tag)
-            .service(get_urls_by_tag)
-            .service(add_tag_to_url)
-            .service(remove_tag_from_url)
+            .service(tags::create_tag)
+            .service(tags::list_tags)
+            .service(tags::delete_tag)
+            .service(tags::get_urls_by_tag)
+            .service(tags::add_tag_to_url)
+            .service(tags::remove_tag_from_url)
             // Bulk URL operations (must be registered before single-item routes)
-            .service(bulk_create_urls)
-            .service(bulk_delete_urls)
+            .service(bulk::bulk_create_urls)
+            .service(bulk::bulk_delete_urls)
             // URL routes (all protected)
-            .service(create_short_url)
-            .service(search_urls)
-            .service(list_urls)
-            .service(get_url_by_id)
-            .service(delete_url_by_id)
-            .service(get_url_analytics_timeline)
-            .service(get_url_analytics_referrers)
-            .service(get_url_analytics_browsers)
-            .service(get_url_analytics_devices)
-            .service(get_url_stats)
-            .service(get_url_qr_code),
+            .service(urls::create_short_url)
+            .service(urls::search_urls)
+            .service(urls::list_urls)
+            .service(urls::get_url_by_id)
+            .service(urls::delete_url_by_id)
+            .service(analytics::get_url_analytics_timeline)
+            .service(analytics::get_url_analytics_referrers)
+            .service(analytics::get_url_analytics_browsers)
+            .service(analytics::get_url_analytics_devices)
+            .service(urls::get_url_stats)
+            .service(urls::get_url_qr_code),
     )
     // Register specific routes before catch-all route
-    .service(health_check)
-    .service(redirect_to_url);
-}
-
-// ============================================================================
-// Auth Endpoints
-// ============================================================================
-
-/// Register a new user
-///
-/// # Request Body
-/// ```json
-/// {
-///     "email": "user@example.com"
-/// }
-/// ```
-///
-/// # Response
-/// ```json
-/// {
-///     "user_id": 1,
-///     "email": "user@example.com",
-///     "api_key": "usk_..."
-/// }
-/// ```
-#[post("/register")]
-async fn register(
-    pool: web::Data<DbPool>,
-    body: web::Json<RegisterRequest>,
-) -> Result<HttpResponse, AppError> {
-    // Validate input
-    body.validate()
-        .map_err(|e| AppError::ValidationError(format!("Invalid input: {}", e)))?;
-
-    let (user, api_key) = services::register_user(&pool, &body.email)?;
-
-    let response = RegisterResponse {
-        user_id: user.id,
-        email: user.email,
-        api_key,
-    };
-
-    Ok(HttpResponse::Created().json(response))
-}
-
-/// Create a new API key
-///
-/// # Request Body
-/// ```json
-/// {
-///     "name": "CI/CD key"
-/// }
-/// ```
-///
-/// # Response
-/// ```json
-/// {
-///     "id": 2,
-///     "name": "CI/CD key",
-///     "api_key": "usk_...",
-///     "created_at": "2024-01-01 12:00:00"
-/// }
-/// ```
-#[post("/keys")]
-async fn create_api_key(
-    user: AuthenticatedUser,
-    pool: web::Data<DbPool>,
-    body: web::Json<CreateApiKeyRequest>,
-) -> Result<HttpResponse, AppError> {
-    // Validate input
-    body.validate()
-        .map_err(|e| AppError::ValidationError(format!("Invalid input: {}", e)))?;
-
-    let (record, api_key) = services::create_api_key(&pool, user.user_id, &body.name)?;
-
-    let response = CreateApiKeyResponse {
-        id: record.id,
-        name: record.name,
-        api_key,
-        created_at: record.created_at,
-    };
-
-    Ok(HttpResponse::Created().json(response))
-}
-
-/// List all API keys for the authenticated user
-///
-/// # Response
-/// ```json
-/// {
-///     "keys": [
-///         {
-///             "id": 1,
-///             "name": "Default key",
-///             "created_at": "2024-01-01 12:00:00",
-///             "last_used_at": "2024-01-02 12:00:00",
-///             "is_active": true
-///         }
-///     ]
-/// }
-/// ```
-#[get("/keys")]
-async fn list_api_keys(
-    user: AuthenticatedUser,
-    pool: web::Data<DbPool>,
-) -> Result<HttpResponse, AppError> {
-    let keys = services::list_api_keys(&pool, user.user_id)?;
-
-    let key_responses: Vec<ApiKeyResponse> = keys.iter().map(ApiKeyResponse::from_record).collect();
-
-    let response = ApiKeyListResponse {
-        keys: key_responses,
-    };
-
-    Ok(HttpResponse::Ok().json(response))
-}
-
-/// Revoke an API key
-///
-/// # Path Parameters
-/// - `id`: The API key ID to revoke
-///
-/// # Response
-/// ```json
-/// {
-///     "message": "API key revoked successfully"
-/// }
-/// ```
-#[delete("/keys/{id}")]
-async fn revoke_api_key(
-    user: AuthenticatedUser,
-    pool: web::Data<DbPool>,
-    cache: web::Data<AppCache>,
-    path: web::Path<i64>,
-) -> Result<HttpResponse, AppError> {
-    let key_id = path.into_inner();
-    services::revoke_api_key_with_cache(&pool, Some(&cache), user.user_id, key_id)?;
-
-    Ok(HttpResponse::Ok().json(MessageResponse::new("API key revoked successfully")))
-}
-
-// ============================================================================
-// URL Endpoints
-// ============================================================================
-
-/// Create a new short URL
-///
-/// # Request Body
-/// ```json
-/// {
-///     "url": "https://example.com/very/long/url",
-///     "custom_code": "mylink",  // optional
-///     "expires_in_hours": 24    // optional
-/// }
-/// ```
-///
-/// # Response
-/// ```json
-/// {
-///     "short_code": "mylink",
-///     "short_url": "http://localhost:8080/mylink",
-///     "original_url": "https://example.com/very/long/url",
-///     "created_at": "2024-01-01 12:00:00",
-///     "expires_at": null
-/// }
-/// ```
-#[post("/shorten")]
-async fn create_short_url(
-    user: AuthenticatedUser,
-    pool: web::Data<DbPool>,
-    config: web::Data<Config>,
-    metrics: Option<web::Data<AppMetrics>>,
-    body: web::Json<CreateUrlRequest>,
-) -> Result<HttpResponse, AppError> {
-    // Validate input
-    body.validate()
-        .map_err(|e| AppError::ValidationError(format!("Invalid input: {}", e)))?;
-
-    // Validate URL format
-    url::Url::parse(&body.url)
-        .map_err(|_| AppError::ValidationError("Invalid URL format".into()))?;
-
-    // Create the short URL with metrics
-    let url = services::create_url_with_metrics(
-        &pool,
-        &body,
-        config.short_code_length,
-        user.user_id,
-        metrics.as_ref().map(|m| m.as_ref()),
-    )?;
-
-    let response = CreateUrlResponse {
-        short_code: url.short_code.clone(),
-        short_url: format!("{}/{}", config.base_url, url.short_code),
-        original_url: url.original_url,
-        created_at: url.created_at,
-        expires_at: url.expires_at,
-    };
-
-    Ok(HttpResponse::Created().json(response))
-}
-
-/// Search URLs by original URL and/or short code
-///
-/// # Query Parameters
-/// - `q`: Search term for original URL (case-insensitive, partial match)
-/// - `code`: Search term for short code (case-insensitive, partial match)
-/// - `limit`: Maximum results (default: 20, max: 100)
-///
-/// At least one of `q` or `code` must be provided.
-///
-/// # Response
-/// ```json
-/// {
-///     "total": 5,
-///     "urls": [...]
-/// }
-/// ```
-#[get("/urls/search")]
-async fn search_urls(
-    user: AuthenticatedUser,
-    pool: web::Data<DbPool>,
-    config: web::Data<Config>,
-    query: web::Query<SearchUrlsQuery>,
-) -> Result<HttpResponse, AppError> {
-    // Validate that at least one search parameter is provided
-    if query.q.is_none() && query.code.is_none() {
-        return Err(AppError::ValidationError(
-            "At least one search parameter (q or code) is required".into(),
-        ));
-    }
-
-    let limit = query.limit.unwrap_or(DEFAULT_PAGE_LIMIT).min(MAX_PAGE_LIMIT);
-
-    let urls = services::search_urls(
-        &pool,
-        user.user_id,
-        query.q.as_deref(),
-        query.code.as_deref(),
-        limit,
-    )?;
-
-    let url_responses: Vec<UrlResponse> = urls
-        .into_iter()
-        .map(|u| UrlResponse::from_url(u, &config.base_url))
-        .collect();
-
-    let response = UrlListResponse {
-        total: url_responses.len(),
-        urls: url_responses,
-    };
-
-    Ok(HttpResponse::Ok().json(response))
-}
-
-/// List all URLs for the authenticated user with pagination
-///
-/// # Query Parameters
-/// - `page`: Page number (default: 1)
-/// - `limit`: Items per page (default: 20, max: 100)
-/// - `sort`: Sort order - "asc" or "desc" (default: "desc")
-///
-/// # Response
-/// ```json
-/// {
-///     "total": 42,
-///     "urls": [...]
-/// }
-/// ```
-#[get("/urls")]
-async fn list_urls(
-    user: AuthenticatedUser,
-    pool: web::Data<DbPool>,
-    config: web::Data<Config>,
-    query: web::Query<ListUrlsQuery>,
-) -> Result<HttpResponse, AppError> {
-    let urls = services::list_urls(&pool, user.user_id, &query)?;
-    let total = services::count_urls(&pool, user.user_id)?;
-
-    let url_responses: Vec<UrlResponse> = urls
-        .into_iter()
-        .map(|u| UrlResponse::from_url(u, &config.base_url))
-        .collect();
-
-    let response = UrlListResponse {
-        total,
-        urls: url_responses,
-    };
-
-    Ok(HttpResponse::Ok().json(response))
-}
-
-/// Get URL details by ID
-///
-/// # Path Parameters
-/// - `id`: The URL ID
-///
-/// # Response
-/// Returns the full URL details including click statistics
-#[get("/urls/{id}")]
-async fn get_url_by_id(
-    user: AuthenticatedUser,
-    pool: web::Data<DbPool>,
-    config: web::Data<Config>,
-    path: web::Path<i64>,
-) -> Result<HttpResponse, AppError> {
-    let id = path.into_inner();
-    let url = services::get_url_by_id(&pool, id, user.user_id)?;
-    let response = UrlResponse::from_url(url, &config.base_url);
-
-    Ok(HttpResponse::Ok().json(response))
-}
-
-/// Get URL statistics and recent clicks
-///
-/// # Path Parameters
-/// - `id`: The URL ID
-///
-/// # Response
-/// Returns click statistics and recent click logs
-#[get("/urls/{id}/stats")]
-async fn get_url_stats(
-    user: AuthenticatedUser,
-    pool: web::Data<DbPool>,
-    config: web::Data<Config>,
-    path: web::Path<i64>,
-) -> Result<HttpResponse, AppError> {
-    let id = path.into_inner();
-    let url = services::get_url_by_id(&pool, id, user.user_id)?;
-    let click_logs = services::get_click_logs(&pool, id, 50)?;
-
-    let response = serde_json::json!({
-        "url": UrlResponse::from_url(url, &config.base_url),
-        "recent_clicks": click_logs
-    });
-
-    Ok(HttpResponse::Ok().json(response))
-}
-
-/// Get QR code for a URL
-///
-/// # Path Parameters
-/// - `id`: The URL ID
-///
-/// # Query Parameters
-/// - `format`: Output format - "png" (default) or "svg"
-/// - `size`: Size in pixels (default: 256, min: 64, max: 1024)
-///
-/// # Response
-/// Returns the QR code image in the requested format
-#[get("/urls/{id}/qr")]
-async fn get_url_qr_code(
-    user: AuthenticatedUser,
-    pool: web::Data<DbPool>,
-    config: web::Data<Config>,
-    path: web::Path<i64>,
-    query: web::Query<QrCodeQuery>,
-) -> Result<HttpResponse, AppError> {
-    let id = path.into_inner();
-
-    // Verify the URL exists and belongs to the user
-    let url = services::get_url_by_id(&pool, id, user.user_id)?;
-
-    // Build the full short URL
-    let short_url = format!("{}/{}", config.base_url, url.short_code);
-
-    // Parse and validate options
-    let format = query
-        .format
-        .as_ref()
-        .map(|f| QrFormat::from_str(f))
-        .unwrap_or_default();
-
-    let size = query.size.unwrap_or(DEFAULT_QR_SIZE).clamp(MIN_QR_SIZE, MAX_QR_SIZE);
-
-    let options = QrOptions { format, size };
-
-    // Generate QR code
-    let qr_bytes = qr::generate_qr_code(&short_url, &options)?;
-
-    Ok(HttpResponse::Ok()
-        .content_type(format.content_type())
-        .body(qr_bytes))
-}
-
-/// Delete a URL by ID
-///
-/// # Path Parameters
-/// - `id`: The URL ID to delete
-///
-/// # Response
-/// ```json
-/// {
-///     "message": "URL deleted successfully"
-/// }
-/// ```
-#[delete("/urls/{id}")]
-async fn delete_url_by_id(
-    user: AuthenticatedUser,
-    pool: web::Data<DbPool>,
-    cache: web::Data<AppCache>,
-    path: web::Path<i64>,
-) -> Result<HttpResponse, AppError> {
-    let id = path.into_inner();
-    services::delete_url_with_cache(&pool, Some(&cache), id, user.user_id)?;
-
-    Ok(HttpResponse::Ok().json(MessageResponse::new("URL deleted successfully")))
-}
-
-// ============================================================================
-// Bulk URL Endpoints
-// ============================================================================
-
-/// Bulk create multiple short URLs
-///
-/// # Request Body
-/// ```json
-/// {
-///     "urls": [
-///         { "url": "https://example1.com", "custom_code": "ex1" },
-///         { "url": "https://example2.com", "expires_in_hours": 24 }
-///     ]
-/// }
-/// ```
-///
-/// # Response
-/// - 201 Created: All items succeeded
-/// - 207 Multi-Status: Partial success or all failed (check response body)
-///
-/// ```json
-/// {
-///     "status": "success",
-///     "total": 2,
-///     "succeeded": 2,
-///     "failed": 0,
-///     "results": [...]
-/// }
-/// ```
-#[post("/urls/bulk")]
-async fn bulk_create_urls(
-    user: AuthenticatedUser,
-    pool: web::Data<DbPool>,
-    config: web::Data<Config>,
-    body: web::Json<BulkCreateUrlRequest>,
-) -> Result<HttpResponse, AppError> {
-    // Validate input
-    body.validate()
-        .map_err(|e| AppError::ValidationError(format!("Invalid input: {}", e)))?;
-
-    // Validate each URL format
-    for (index, item) in body.urls.iter().enumerate() {
-        url::Url::parse(&item.url).map_err(|_| {
-            AppError::ValidationError(format!("Invalid URL format at index {}", index))
-        })?;
-    }
-
-    // Perform bulk create
-    let response = services::bulk_create_urls(
-        &pool,
-        &body.urls,
-        config.short_code_length,
-        user.user_id,
-        &config.base_url,
-    )?;
-
-    // Return appropriate status code based on results
-    let status_code = if response.status == BulkOperationStatus::Success {
-        actix_web::http::StatusCode::CREATED
-    } else {
-        actix_web::http::StatusCode::MULTI_STATUS
-    };
-
-    Ok(HttpResponse::build(status_code).json(response))
-}
-
-/// Bulk delete multiple URLs by ID
-///
-/// # Request Body
-/// ```json
-/// {
-///     "ids": [1, 2, 3]
-/// }
-/// ```
-///
-/// # Response
-/// - 200 OK: All items succeeded
-/// - 207 Multi-Status: Partial success or all failed (check response body)
-///
-/// ```json
-/// {
-///     "status": "success",
-///     "total": 3,
-///     "succeeded": 3,
-///     "failed": 0,
-///     "results": [...]
-/// }
-/// ```
-#[delete("/urls/bulk")]
-async fn bulk_delete_urls(
-    user: AuthenticatedUser,
-    pool: web::Data<DbPool>,
-    cache: web::Data<AppCache>,
-    body: web::Json<BulkDeleteUrlRequest>,
-) -> Result<HttpResponse, AppError> {
-    // Validate input
-    body.validate()
-        .map_err(|e| AppError::ValidationError(format!("Invalid input: {}", e)))?;
-
-    // Perform bulk delete with cache invalidation
-    let response = services::bulk_delete_urls_with_cache(&pool, Some(&cache), &body.ids, user.user_id)?;
-
-    // Return appropriate status code based on results
-    let status_code = if response.status == BulkOperationStatus::Success {
-        actix_web::http::StatusCode::OK
-    } else {
-        actix_web::http::StatusCode::MULTI_STATUS
-    };
-
-    Ok(HttpResponse::build(status_code).json(response))
-}
-
-// ============================================================================
-// Tag Endpoints
-// ============================================================================
-
-/// Create a new tag
-///
-/// # Request Body
-/// ```json
-/// {
-///     "name": "Important"
-/// }
-/// ```
-///
-/// # Response
-/// ```json
-/// {
-///     "id": 1,
-///     "name": "Important",
-///     "created_at": "2024-01-01 12:00:00"
-/// }
-/// ```
-#[post("/tags")]
-async fn create_tag(
-    user: AuthenticatedUser,
-    pool: web::Data<DbPool>,
-    body: web::Json<CreateTagRequest>,
-) -> Result<HttpResponse, AppError> {
-    // Validate input
-    body.validate()
-        .map_err(|e| AppError::ValidationError(format!("Invalid input: {}", e)))?;
-
-    let tag = services::create_tag(&pool, &body.name, user.user_id)?;
-
-    let response = TagResponse::from_tag(&tag);
-    Ok(HttpResponse::Created().json(response))
-}
-
-/// List all tags for the authenticated user
-///
-/// # Response
-/// ```json
-/// {
-///     "tags": [
-///         { "id": 1, "name": "Important", "created_at": "..." },
-///         { "id": 2, "name": "Work", "created_at": "..." }
-///     ]
-/// }
-/// ```
-#[get("/tags")]
-async fn list_tags(
-    user: AuthenticatedUser,
-    pool: web::Data<DbPool>,
-) -> Result<HttpResponse, AppError> {
-    let tags = services::list_tags(&pool, user.user_id)?;
-
-    let tag_responses: Vec<TagResponse> = tags.iter().map(TagResponse::from_tag).collect();
-
-    let response = TagListResponse {
-        tags: tag_responses,
-    };
-
-    Ok(HttpResponse::Ok().json(response))
-}
-
-/// Delete a tag
-///
-/// # Path Parameters
-/// - `id`: The tag ID to delete
-///
-/// # Response
-/// ```json
-/// {
-///     "message": "Tag deleted successfully"
-/// }
-/// ```
-#[delete("/tags/{id}")]
-async fn delete_tag(
-    user: AuthenticatedUser,
-    pool: web::Data<DbPool>,
-    path: web::Path<i64>,
-) -> Result<HttpResponse, AppError> {
-    let tag_id = path.into_inner();
-    services::delete_tag(&pool, tag_id, user.user_id)?;
-
-    Ok(HttpResponse::Ok().json(MessageResponse::new("Tag deleted successfully")))
-}
-
-/// Add a tag to a URL
-///
-/// # Path Parameters
-/// - `id`: The URL ID
-///
-/// # Request Body
-/// ```json
-/// {
-///     "tag_id": 1
-/// }
-/// ```
-///
-/// # Response
-/// ```json
-/// {
-///     "message": "Tag added to URL successfully"
-/// }
-/// ```
-#[post("/urls/{id}/tags")]
-async fn add_tag_to_url(
-    user: AuthenticatedUser,
-    pool: web::Data<DbPool>,
-    path: web::Path<i64>,
-    body: web::Json<AddTagToUrlRequest>,
-) -> Result<HttpResponse, AppError> {
-    let url_id = path.into_inner();
-    services::add_tag_to_url(&pool, url_id, body.tag_id, user.user_id)?;
-
-    Ok(HttpResponse::Created().json(MessageResponse::new("Tag added to URL successfully")))
-}
-
-/// Remove a tag from a URL
-///
-/// # Path Parameters
-/// - `id`: The URL ID
-/// - `tag_id`: The tag ID to remove
-///
-/// # Response
-/// ```json
-/// {
-///     "message": "Tag removed from URL successfully"
-/// }
-/// ```
-#[delete("/urls/{id}/tags/{tag_id}")]
-async fn remove_tag_from_url(
-    user: AuthenticatedUser,
-    pool: web::Data<DbPool>,
-    path: web::Path<(i64, i64)>,
-) -> Result<HttpResponse, AppError> {
-    let (url_id, tag_id) = path.into_inner();
-    services::remove_tag_from_url(&pool, url_id, tag_id, user.user_id)?;
-
-    Ok(HttpResponse::Ok().json(MessageResponse::new("Tag removed from URL successfully")))
-}
-
-/// Get all URLs with a specific tag
-///
-/// # Path Parameters
-/// - `id`: The tag ID
-///
-/// # Response
-/// ```json
-/// {
-///     "urls": [
-///         { "id": 1, "short_code": "abc123", "original_url": "...", "tags": [...] }
-///     ]
-/// }
-/// ```
-#[get("/tags/{id}/urls")]
-async fn get_urls_by_tag(
-    user: AuthenticatedUser,
-    pool: web::Data<DbPool>,
-    config: web::Data<Config>,
-    path: web::Path<i64>,
-) -> Result<HttpResponse, AppError> {
-    let tag_id = path.into_inner();
-
-    // Use optimized function that fetches URLs with their tags in 2 queries instead of N+1
-    let urls_with_tags = services::get_urls_by_tag_with_tags(&pool, tag_id, user.user_id)?;
-
-    let url_responses: Vec<UrlWithTagsResponse> = urls_with_tags
-        .into_iter()
-        .map(|(url, tags)| {
-            let tag_responses: Vec<TagResponse> = tags.iter().map(TagResponse::from_tag).collect();
-            UrlWithTagsResponse {
-                id: url.id,
-                short_code: url.short_code.clone(),
-                short_url: format!("{}/{}", config.base_url, url.short_code),
-                original_url: url.original_url,
-                clicks: url.clicks,
-                created_at: url.created_at,
-                updated_at: url.updated_at,
-                expires_at: url.expires_at,
-                tags: tag_responses,
-            }
-        })
-        .collect();
-
-    let response = UrlsByTagResponse {
-        urls: url_responses,
-    };
-
-    Ok(HttpResponse::Ok().json(response))
-}
-
-// ============================================================================
-// Analytics Endpoints
-// ============================================================================
-
-/// Get click timeline for a URL
-///
-/// # Path Parameters
-/// - `id`: The URL ID
-///
-/// # Query Parameters
-/// - `period`: "hourly", "daily" (default), or "weekly"
-/// - `limit`: Maximum buckets to return (default: 30, max: 100)
-#[get("/urls/{id}/analytics/timeline")]
-async fn get_url_analytics_timeline(
-    user: AuthenticatedUser,
-    pool: web::Data<DbPool>,
-    path: web::Path<i64>,
-    query: web::Query<TimelineQuery>,
-) -> Result<HttpResponse, AppError> {
-    let id = path.into_inner();
-
-    // Verify URL ownership
-    services::get_url_by_id(&pool, id, user.user_id)?;
-
-    let period = query.period.as_deref().unwrap_or("daily");
-    if !["hourly", "daily", "weekly"].contains(&period) {
-        return Err(AppError::ValidationError(
-            "Invalid period. Must be one of: hourly, daily, weekly".into(),
-        ));
-    }
-
-    let limit = query.limit.unwrap_or(30).min(MAX_ANALYTICS_RESULTS);
-
-    let data = services::get_click_timeline(&pool, id, period, limit)?;
-
-    let response = TimelineResponse {
-        period: period.to_string(),
-        data,
-    };
-
-    Ok(HttpResponse::Ok().json(response))
-}
-
-/// Get referrer breakdown for a URL
-///
-/// # Path Parameters
-/// - `id`: The URL ID
-///
-/// # Query Parameters
-/// - `limit`: Maximum entries (default: 20, max: 100)
-#[get("/urls/{id}/analytics/referrers")]
-async fn get_url_analytics_referrers(
-    user: AuthenticatedUser,
-    pool: web::Data<DbPool>,
-    path: web::Path<i64>,
-    query: web::Query<BreakdownQuery>,
-) -> Result<HttpResponse, AppError> {
-    let id = path.into_inner();
-    services::get_url_by_id(&pool, id, user.user_id)?;
-
-    let limit = query.limit.unwrap_or(20).min(MAX_ANALYTICS_RESULTS);
-    let data = services::get_referrer_breakdown(&pool, id, limit)?;
-
-    Ok(HttpResponse::Ok().json(ReferrerBreakdownResponse { data }))
-}
-
-/// Get browser breakdown for a URL
-///
-/// # Path Parameters
-/// - `id`: The URL ID
-///
-/// # Query Parameters
-/// - `limit`: Maximum entries (default: 20, max: 100)
-#[get("/urls/{id}/analytics/browsers")]
-async fn get_url_analytics_browsers(
-    user: AuthenticatedUser,
-    pool: web::Data<DbPool>,
-    path: web::Path<i64>,
-    query: web::Query<BreakdownQuery>,
-) -> Result<HttpResponse, AppError> {
-    let id = path.into_inner();
-    services::get_url_by_id(&pool, id, user.user_id)?;
-
-    let limit = query.limit.unwrap_or(20).min(MAX_ANALYTICS_RESULTS);
-    let data = services::get_browser_breakdown(&pool, id, limit)?;
-
-    Ok(HttpResponse::Ok().json(BrowserBreakdownResponse { data }))
-}
-
-/// Get device breakdown for a URL
-///
-/// # Path Parameters
-/// - `id`: The URL ID
-///
-/// # Query Parameters
-/// - `limit`: Maximum entries (default: 20, max: 100)
-#[get("/urls/{id}/analytics/devices")]
-async fn get_url_analytics_devices(
-    user: AuthenticatedUser,
-    pool: web::Data<DbPool>,
-    path: web::Path<i64>,
-    query: web::Query<BreakdownQuery>,
-) -> Result<HttpResponse, AppError> {
-    let id = path.into_inner();
-    services::get_url_by_id(&pool, id, user.user_id)?;
-
-    let limit = query.limit.unwrap_or(20).min(MAX_ANALYTICS_RESULTS);
-    let data = services::get_device_breakdown(&pool, id, limit)?;
-
-    Ok(HttpResponse::Ok().json(DeviceBreakdownResponse { data }))
-}
-
-// ============================================================================
-// Redirect Endpoint
-// ============================================================================
-
-/// Redirect to the original URL
-///
-/// This is the main functionality - when someone visits /{short_code},
-/// they get redirected to the original URL.
-///
-/// # Path Parameters
-/// - `short_code`: The short code to look up
-///
-/// # Response
-/// - 301 Permanent Redirect to the original URL
-/// - 404 Not Found if the code doesn't exist
-/// - 410 Gone if the URL has expired
-#[get("/{short_code}")]
-async fn redirect_to_url(
-    pool: web::Data<DbPool>,
-    cache: web::Data<AppCache>,
-    config: web::Data<Config>,
-    metrics: Option<web::Data<AppMetrics>>,
-    path: web::Path<String>,
-    req: HttpRequest,
-) -> Result<HttpResponse, AppError> {
-    let short_code = path.into_inner();
-
-    // Don't redirect for common paths
-    if short_code == "favicon.ico" || short_code == "robots.txt" {
-        return Err(AppError::NotFound("Resource not found".into()));
-    }
-
-    let url = services::get_url_by_code_cached_with_metrics(
-        &pool,
-        &cache,
-        &short_code,
-        metrics.as_ref().map(|m| m.as_ref()),
-    )?;
-
-    // Extract request metadata for analytics
-    let ip_address = req
-        .connection_info()
-        .realip_remote_addr()
-        .map(|s| s.to_string());
-
-    let user_agent = req
-        .headers()
-        .get("user-agent")
-        .and_then(|h| h.to_str().ok())
-        .map(|s| s.to_string());
-
-    let referer = req
-        .headers()
-        .get("referer")
-        .and_then(|h| h.to_str().ok())
-        .map(|s| s.to_string());
-
-    // Record the click if logging is enabled
-    if config.click_logging_enabled {
-        let _ = services::record_click(
-            &pool,
-            url.id,
-            ip_address.as_deref(),
-            user_agent.as_deref(),
-            referer.as_deref(),
-        );
-    }
-
-    // Record redirect metric
-    if let Some(ref m) = metrics {
-        m.record_redirect();
-    }
-
-    log::info!(
-        "Redirecting {} -> {} (clicks: {})",
-        short_code,
-        url.original_url,
-        url.clicks + 1
-    );
-
-    // Return 301 Moved Permanently redirect
-    Ok(HttpResponse::MovedPermanently()
-        .append_header(("Location", url.original_url))
-        .finish())
-}
-
-// ============================================================================
-// Health Check
-// ============================================================================
-
-/// Health check endpoint
-///
-/// # Response
-/// ```json
-/// {
-///     "status": "healthy",
-///     "version": "0.1.0"
-/// }
-/// ```
-#[get("/health")]
-async fn health_check() -> HttpResponse {
-    HttpResponse::Ok().json(serde_json::json!({
-        "status": "healthy",
-        "version": env!("CARGO_PKG_VERSION")
-    }))
+    .service(health::health_check)
+    .service(redirect::redirect_to_url);
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::cache::AppCache;
+    use crate::config::Config;
+    use crate::db::DbPool;
+    use crate::models::{
+        ApiKeyListResponse, BulkOperationStatus, CreateApiKeyResponse, CreateUrlRequest,
+        CreateUrlResponse, RegisterResponse, TagListResponse, TagResponse, TimelineResponse,
+        UrlListResponse, UrlResponse, UrlsByTagResponse, BrowserBreakdownResponse,
+        DeviceBreakdownResponse, ReferrerBreakdownResponse,
+    };
+    use crate::services;
     use crate::test_utils::{setup_test_pool, test_cache, test_config};
     use actix_web::{test, App};
 
@@ -1069,7 +139,6 @@ mod tests {
     async fn test_create_and_list_urls() {
         let pool = setup_test_pool();
 
-        // Register a user first
         let (_, api_key) = services::register_user(&pool, "test@example.com").unwrap();
 
         let app = setup_test_app(pool).await;
@@ -1105,7 +174,6 @@ mod tests {
     async fn test_redirect() {
         let pool = setup_test_pool();
 
-        // Register a user and create a URL
         let (user, _) = services::register_user(&pool, "test@example.com").unwrap();
         let request = CreateUrlRequest {
             url: "https://example.com".to_string(),
@@ -1116,7 +184,6 @@ mod tests {
 
         let app = setup_test_app(pool).await;
 
-        // Test redirect
         let req = test::TestRequest::get()
             .uri("/redirect_test")
             .to_request();
@@ -1129,7 +196,6 @@ mod tests {
     async fn test_api_key_management() {
         let pool = setup_test_pool();
 
-        // Register a user
         let (_, api_key) = services::register_user(&pool, "test@example.com").unwrap();
 
         let app = setup_test_app(pool).await;
@@ -1159,7 +225,7 @@ mod tests {
         assert!(resp.status().is_success());
 
         let body: ApiKeyListResponse = test::read_body_json(resp).await;
-        assert_eq!(body.keys.len(), 2); // Default + Test Key
+        assert_eq!(body.keys.len(), 2);
 
         // Revoke the new key
         let key_id = body.keys.iter().find(|k| k.name == "Test Key").unwrap().id;
@@ -1177,11 +243,9 @@ mod tests {
     async fn test_url_ownership_isolation() {
         let pool = setup_test_pool();
 
-        // Register two users
         let (user1, api_key1) = services::register_user(&pool, "user1@example.com").unwrap();
         let (_, api_key2) = services::register_user(&pool, "user2@example.com").unwrap();
 
-        // Create a URL for user1
         let request = CreateUrlRequest {
             url: "https://example.com".to_string(),
             custom_code: Some("user1_url".to_string()),
@@ -1218,12 +282,10 @@ mod tests {
     async fn test_bulk_create_endpoint() {
         let pool = setup_test_pool();
 
-        // Register a user
         let (_, api_key) = services::register_user(&pool, "test@example.com").unwrap();
 
         let app = setup_test_app(pool).await;
 
-        // Bulk create URLs
         let req = test::TestRequest::post()
             .uri("/api/urls/bulk")
             .insert_header(("X-API-Key", api_key))
@@ -1250,7 +312,6 @@ mod tests {
         let pool = setup_test_pool();
         let app = setup_test_app(pool).await;
 
-        // Try bulk create without auth
         let req = test::TestRequest::post()
             .uri("/api/urls/bulk")
             .set_json(serde_json::json!({
@@ -1268,12 +329,10 @@ mod tests {
     async fn test_bulk_create_validates_limit() {
         let pool = setup_test_pool();
 
-        // Register a user
         let (_, api_key) = services::register_user(&pool, "test@example.com").unwrap();
 
         let app = setup_test_app(pool).await;
 
-        // Create request with >100 URLs
         let urls: Vec<serde_json::Value> = (0..101)
             .map(|i| serde_json::json!({ "url": format!("https://example{}.com", i) }))
             .collect();
@@ -1292,7 +351,6 @@ mod tests {
     async fn test_bulk_delete_endpoint() {
         let pool = setup_test_pool();
 
-        // Register a user and create some URLs
         let (user, api_key) = services::register_user(&pool, "test@example.com").unwrap();
 
         let mut ids = vec![];
@@ -1308,7 +366,6 @@ mod tests {
 
         let app = setup_test_app(pool).await;
 
-        // Bulk delete
         let req = test::TestRequest::delete()
             .uri("/api/urls/bulk")
             .insert_header(("X-API-Key", api_key))
@@ -1328,10 +385,8 @@ mod tests {
     async fn test_bulk_operations_return_207_on_partial() {
         let pool = setup_test_pool();
 
-        // Register a user
         let (user, api_key) = services::register_user(&pool, "test@example.com").unwrap();
 
-        // Create one URL
         let request = CreateUrlRequest {
             url: "https://existing.com".to_string(),
             custom_code: Some("exists207".to_string()),
@@ -1341,7 +396,6 @@ mod tests {
 
         let app = setup_test_app(pool).await;
 
-        // Bulk delete with one valid, one invalid ID
         let req = test::TestRequest::delete()
             .uri("/api/urls/bulk")
             .insert_header(("X-API-Key", api_key))
@@ -1349,7 +403,7 @@ mod tests {
             .to_request();
 
         let resp: actix_web::dev::ServiceResponse = test::call_service(&app, req).await;
-        assert_eq!(resp.status(), 207); // Multi-Status
+        assert_eq!(resp.status(), 207);
 
         let body: crate::models::BulkDeleteUrlResponse = test::read_body_json(resp).await;
         assert_eq!(body.status, BulkOperationStatus::PartialSuccess);
@@ -1365,12 +419,10 @@ mod tests {
     async fn test_create_tag_endpoint() {
         let pool = setup_test_pool();
 
-        // Register a user
         let (_, api_key) = services::register_user(&pool, "test@example.com").unwrap();
 
         let app = setup_test_app(pool).await;
 
-        // Create a tag
         let req = test::TestRequest::post()
             .uri("/api/tags")
             .insert_header(("X-API-Key", api_key))
@@ -1390,14 +442,12 @@ mod tests {
     async fn test_list_tags_endpoint() {
         let pool = setup_test_pool();
 
-        // Register a user and create tags
         let (user, api_key) = services::register_user(&pool, "test@example.com").unwrap();
         services::create_tag(&pool, "Work", user.id).unwrap();
         services::create_tag(&pool, "Personal", user.id).unwrap();
 
         let app = setup_test_app(pool).await;
 
-        // List tags
         let req = test::TestRequest::get()
             .uri("/api/tags")
             .insert_header(("X-API-Key", api_key))
@@ -1414,13 +464,11 @@ mod tests {
     async fn test_delete_tag_endpoint() {
         let pool = setup_test_pool();
 
-        // Register a user and create a tag
         let (user, api_key) = services::register_user(&pool, "test@example.com").unwrap();
         let tag = services::create_tag(&pool, "ToDelete", user.id).unwrap();
 
         let app = setup_test_app(pool).await;
 
-        // Delete the tag
         let req = test::TestRequest::delete()
             .uri(&format!("/api/tags/{}", tag.id))
             .insert_header(("X-API-Key", api_key))
@@ -1434,7 +482,6 @@ mod tests {
     async fn test_add_tag_to_url_endpoint() {
         let pool = setup_test_pool();
 
-        // Register a user, create a tag, and create a URL
         let (user, api_key) = services::register_user(&pool, "test@example.com").unwrap();
         let tag = services::create_tag(&pool, "Important", user.id).unwrap();
 
@@ -1447,7 +494,6 @@ mod tests {
 
         let app = setup_test_app(pool).await;
 
-        // Add tag to URL
         let req = test::TestRequest::post()
             .uri(&format!("/api/urls/{}/tags", url.id))
             .insert_header(("X-API-Key", api_key))
@@ -1487,7 +533,6 @@ mod tests {
     async fn test_get_urls_by_tag_endpoint() {
         let pool = setup_test_pool();
 
-        // Register a user, create a tag, and create URLs
         let (user, api_key) = services::register_user(&pool, "test@example.com").unwrap();
         let tag = services::create_tag(&pool, "Work", user.id).unwrap();
 
@@ -1509,7 +554,6 @@ mod tests {
 
         let app = setup_test_app(pool).await;
 
-        // Get URLs by tag
         let req = test::TestRequest::get()
             .uri(&format!("/api/tags/{}/urls", tag.id))
             .insert_header(("X-API-Key", api_key))
@@ -1530,7 +574,6 @@ mod tests {
     async fn test_get_qr_code_png() {
         let pool = setup_test_pool();
 
-        // Register a user and create a URL
         let (user, api_key) = services::register_user(&pool, "test@example.com").unwrap();
 
         let request = CreateUrlRequest {
@@ -1542,7 +585,6 @@ mod tests {
 
         let app = setup_test_app(pool).await;
 
-        // Get QR code as PNG (default)
         let req = test::TestRequest::get()
             .uri(&format!("/api/urls/{}/qr", url.id))
             .insert_header(("X-API-Key", api_key))
@@ -1551,11 +593,9 @@ mod tests {
         let resp: actix_web::dev::ServiceResponse = test::call_service(&app, req).await;
         assert!(resp.status().is_success());
 
-        // Check content type
         let content_type = resp.headers().get("content-type").unwrap();
         assert_eq!(content_type, "image/png");
 
-        // Check that body contains PNG magic bytes
         let body = test::read_body(resp).await;
         assert!(body.starts_with(&[0x89, 0x50, 0x4E, 0x47]));
     }
@@ -1564,7 +604,6 @@ mod tests {
     async fn test_get_qr_code_svg() {
         let pool = setup_test_pool();
 
-        // Register a user and create a URL
         let (user, api_key) = services::register_user(&pool, "test@example.com").unwrap();
 
         let request = CreateUrlRequest {
@@ -1576,7 +615,6 @@ mod tests {
 
         let app = setup_test_app(pool).await;
 
-        // Get QR code as SVG
         let req = test::TestRequest::get()
             .uri(&format!("/api/urls/{}/qr?format=svg", url.id))
             .insert_header(("X-API-Key", api_key))
@@ -1585,11 +623,9 @@ mod tests {
         let resp: actix_web::dev::ServiceResponse = test::call_service(&app, req).await;
         assert!(resp.status().is_success());
 
-        // Check content type
         let content_type = resp.headers().get("content-type").unwrap();
         assert_eq!(content_type, "image/svg+xml");
 
-        // Check that body contains SVG content
         let body = test::read_body(resp).await;
         let body_str = String::from_utf8(body.to_vec()).unwrap();
         assert!(body_str.contains("<svg"));
@@ -1599,7 +635,6 @@ mod tests {
     async fn test_get_qr_code_with_size() {
         let pool = setup_test_pool();
 
-        // Register a user and create a URL
         let (user, api_key) = services::register_user(&pool, "test@example.com").unwrap();
 
         let request = CreateUrlRequest {
@@ -1611,7 +646,6 @@ mod tests {
 
         let app = setup_test_app(pool).await;
 
-        // Get QR code with custom size
         let req = test::TestRequest::get()
             .uri(&format!("/api/urls/{}/qr?size=512", url.id))
             .insert_header(("X-API-Key", api_key))
@@ -1625,7 +659,6 @@ mod tests {
     async fn test_get_qr_code_requires_auth() {
         let pool = setup_test_pool();
 
-        // Register a user and create a URL
         let (user, _) = services::register_user(&pool, "test@example.com").unwrap();
 
         let request = CreateUrlRequest {
@@ -1637,7 +670,6 @@ mod tests {
 
         let app = setup_test_app(pool).await;
 
-        // Try to get QR code without auth
         let req = test::TestRequest::get()
             .uri(&format!("/api/urls/{}/qr", url.id))
             .to_request();
@@ -1650,12 +682,10 @@ mod tests {
     async fn test_get_qr_code_not_found() {
         let pool = setup_test_pool();
 
-        // Register a user
         let (_, api_key) = services::register_user(&pool, "test@example.com").unwrap();
 
         let app = setup_test_app(pool).await;
 
-        // Try to get QR code for non-existent URL
         let req = test::TestRequest::get()
             .uri("/api/urls/99999/qr")
             .insert_header(("X-API-Key", api_key))
@@ -1669,11 +699,9 @@ mod tests {
     async fn test_get_qr_code_respects_ownership() {
         let pool = setup_test_pool();
 
-        // Register two users
         let (user1, _) = services::register_user(&pool, "user1@example.com").unwrap();
         let (_, api_key2) = services::register_user(&pool, "user2@example.com").unwrap();
 
-        // Create URL owned by user1
         let request = CreateUrlRequest {
             url: "https://example.com".to_string(),
             custom_code: Some("qr_owner_test".to_string()),
@@ -1683,7 +711,6 @@ mod tests {
 
         let app = setup_test_app(pool).await;
 
-        // User2 tries to get QR code for user1's URL
         let req = test::TestRequest::get()
             .uri(&format!("/api/urls/{}/qr", url.id))
             .insert_header(("X-API-Key", api_key2))
@@ -1701,7 +728,6 @@ mod tests {
     async fn test_search_urls_by_original_url() {
         let pool = setup_test_pool();
 
-        // Register a user and create URLs
         let (user, api_key) = services::register_user(&pool, "test@example.com").unwrap();
 
         let urls_data = [
@@ -1721,7 +747,6 @@ mod tests {
 
         let app = setup_test_app(pool).await;
 
-        // Search for "github"
         let req = test::TestRequest::get()
             .uri("/api/urls/search?q=github")
             .insert_header(("X-API-Key", api_key))
@@ -1757,7 +782,6 @@ mod tests {
 
         let app = setup_test_app(pool).await;
 
-        // Search for "proj" in code
         let req = test::TestRequest::get()
             .uri("/api/urls/search?code=proj")
             .insert_header(("X-API-Key", api_key))
@@ -1793,7 +817,6 @@ mod tests {
 
         let app = setup_test_app(pool).await;
 
-        // Search for github URLs with "proj" in code
         let req = test::TestRequest::get()
             .uri("/api/urls/search?q=github&code=proj")
             .insert_header(("X-API-Key", api_key))
@@ -1815,7 +838,6 @@ mod tests {
 
         let app = setup_test_app(pool).await;
 
-        // Search without any parameters should fail
         let req = test::TestRequest::get()
             .uri("/api/urls/search")
             .insert_header(("X-API-Key", api_key))
@@ -1830,7 +852,6 @@ mod tests {
         let pool = setup_test_pool();
         let app = setup_test_app(pool).await;
 
-        // Search without auth should fail
         let req = test::TestRequest::get()
             .uri("/api/urls/search?q=test")
             .to_request();
@@ -1846,7 +867,6 @@ mod tests {
         let (user1, api_key1) = services::register_user(&pool, "user1@example.com").unwrap();
         let (user2, api_key2) = services::register_user(&pool, "user2@example.com").unwrap();
 
-        // Create URL for user1
         let request = CreateUrlRequest {
             url: "https://secret.example.com".to_string(),
             custom_code: Some("secret1".to_string()),
@@ -1854,7 +874,6 @@ mod tests {
         };
         services::create_url(&pool, &request, 7, user1.id).unwrap();
 
-        // Create URL for user2
         let request = CreateUrlRequest {
             url: "https://secret.example.com".to_string(),
             custom_code: Some("secret2".to_string()),
@@ -1864,7 +883,7 @@ mod tests {
 
         let app = setup_test_app(pool).await;
 
-        // User1 searches - should only see their URL
+        // User1 searches
         let req = test::TestRequest::get()
             .uri("/api/urls/search?q=secret")
             .insert_header(("X-API-Key", api_key1))
@@ -1875,7 +894,7 @@ mod tests {
         assert_eq!(body.total, 1);
         assert_eq!(body.urls[0].short_code, "secret1");
 
-        // User2 searches - should only see their URL
+        // User2 searches
         let req = test::TestRequest::get()
             .uri("/api/urls/search?q=secret")
             .insert_header(("X-API-Key", api_key2))
@@ -1904,7 +923,6 @@ mod tests {
         };
         let url = services::create_url(&pool, &request, 7, user.id).unwrap();
 
-        // Record some clicks
         for _ in 0..3 {
             services::record_click(&pool, url.id, Some("127.0.0.1"), None, None).unwrap();
         }
@@ -2072,5 +1090,455 @@ mod tests {
 
         let resp: actix_web::dev::ServiceResponse = test::call_service(&app, req).await;
         assert_eq!(resp.status(), 400);
+    }
+
+    // ========================================================================
+    // New Auth Handler Tests
+    // ========================================================================
+
+    #[actix_rt::test]
+    async fn test_register_duplicate_email_returns_error() {
+        let pool = setup_test_pool();
+        services::register_user(&pool, "dup@example.com").unwrap();
+
+        let app = setup_test_app(pool).await;
+
+        let req = test::TestRequest::post()
+            .uri("/api/auth/register")
+            .set_json(serde_json::json!({ "email": "dup@example.com" }))
+            .to_request();
+
+        let resp: actix_web::dev::ServiceResponse = test::call_service(&app, req).await;
+        assert_eq!(resp.status(), 409);
+    }
+
+    #[actix_rt::test]
+    async fn test_register_invalid_email_returns_400() {
+        let pool = setup_test_pool();
+        let app = setup_test_app(pool).await;
+
+        let req = test::TestRequest::post()
+            .uri("/api/auth/register")
+            .set_json(serde_json::json!({ "email": "not-an-email" }))
+            .to_request();
+
+        let resp: actix_web::dev::ServiceResponse = test::call_service(&app, req).await;
+        assert_eq!(resp.status(), 400);
+    }
+
+    #[actix_rt::test]
+    async fn test_list_api_keys_requires_auth() {
+        let pool = setup_test_pool();
+        let app = setup_test_app(pool).await;
+
+        let req = test::TestRequest::get()
+            .uri("/api/auth/keys")
+            .to_request();
+
+        let resp: actix_web::dev::ServiceResponse = test::call_service(&app, req).await;
+        assert_eq!(resp.status(), 401);
+    }
+
+    #[actix_rt::test]
+    async fn test_revoke_api_key_not_found() {
+        let pool = setup_test_pool();
+        let (_, api_key) = services::register_user(&pool, "test@example.com").unwrap();
+
+        let app = setup_test_app(pool).await;
+
+        let req = test::TestRequest::delete()
+            .uri("/api/auth/keys/99999")
+            .insert_header(("X-API-Key", api_key))
+            .to_request();
+
+        let resp: actix_web::dev::ServiceResponse = test::call_service(&app, req).await;
+        assert_eq!(resp.status(), 404);
+    }
+
+    #[actix_rt::test]
+    async fn test_revoke_api_key_requires_auth() {
+        let pool = setup_test_pool();
+        let app = setup_test_app(pool).await;
+
+        let req = test::TestRequest::delete()
+            .uri("/api/auth/keys/1")
+            .to_request();
+
+        let resp: actix_web::dev::ServiceResponse = test::call_service(&app, req).await;
+        assert_eq!(resp.status(), 401);
+    }
+
+    // ========================================================================
+    // New URL Handler Tests
+    // ========================================================================
+
+    #[actix_rt::test]
+    async fn test_create_url_with_custom_code() {
+        let pool = setup_test_pool();
+        let (_, api_key) = services::register_user(&pool, "test@example.com").unwrap();
+
+        let app = setup_test_app(pool).await;
+
+        let req = test::TestRequest::post()
+            .uri("/api/shorten")
+            .insert_header(("X-API-Key", api_key))
+            .set_json(serde_json::json!({
+                "url": "https://example.com",
+                "custom_code": "mycode"
+            }))
+            .to_request();
+
+        let resp: actix_web::dev::ServiceResponse = test::call_service(&app, req).await;
+        assert_eq!(resp.status(), 201);
+
+        let body: CreateUrlResponse = test::read_body_json(resp).await;
+        assert_eq!(body.short_code, "mycode");
+    }
+
+    #[actix_rt::test]
+    async fn test_create_url_with_expiration() {
+        let pool = setup_test_pool();
+        let (_, api_key) = services::register_user(&pool, "test@example.com").unwrap();
+
+        let app = setup_test_app(pool).await;
+
+        let req = test::TestRequest::post()
+            .uri("/api/shorten")
+            .insert_header(("X-API-Key", api_key))
+            .set_json(serde_json::json!({
+                "url": "https://example.com",
+                "custom_code": "exptest",
+                "expires_in_hours": 24
+            }))
+            .to_request();
+
+        let resp: actix_web::dev::ServiceResponse = test::call_service(&app, req).await;
+        assert_eq!(resp.status(), 201);
+
+        let body: CreateUrlResponse = test::read_body_json(resp).await;
+        assert!(body.expires_at.is_some());
+    }
+
+    #[actix_rt::test]
+    async fn test_create_url_invalid_url_format() {
+        let pool = setup_test_pool();
+        let (_, api_key) = services::register_user(&pool, "test@example.com").unwrap();
+
+        let app = setup_test_app(pool).await;
+
+        let req = test::TestRequest::post()
+            .uri("/api/shorten")
+            .insert_header(("X-API-Key", api_key))
+            .set_json(serde_json::json!({
+                "url": "not-a-valid-url"
+            }))
+            .to_request();
+
+        let resp: actix_web::dev::ServiceResponse = test::call_service(&app, req).await;
+        assert_eq!(resp.status(), 400);
+    }
+
+    #[actix_rt::test]
+    async fn test_create_url_duplicate_code() {
+        let pool = setup_test_pool();
+        let (user, api_key) = services::register_user(&pool, "test@example.com").unwrap();
+
+        let request = CreateUrlRequest {
+            url: "https://first.com".to_string(),
+            custom_code: Some("dupcode".to_string()),
+            expires_in_hours: None,
+        };
+        services::create_url(&pool, &request, 7, user.id).unwrap();
+
+        let app = setup_test_app(pool).await;
+
+        let req = test::TestRequest::post()
+            .uri("/api/shorten")
+            .insert_header(("X-API-Key", api_key))
+            .set_json(serde_json::json!({
+                "url": "https://second.com",
+                "custom_code": "dupcode"
+            }))
+            .to_request();
+
+        let resp: actix_web::dev::ServiceResponse = test::call_service(&app, req).await;
+        assert_eq!(resp.status(), 409);
+    }
+
+    #[actix_rt::test]
+    async fn test_get_url_by_id_not_found() {
+        let pool = setup_test_pool();
+        let (_, api_key) = services::register_user(&pool, "test@example.com").unwrap();
+
+        let app = setup_test_app(pool).await;
+
+        let req = test::TestRequest::get()
+            .uri("/api/urls/99999")
+            .insert_header(("X-API-Key", api_key))
+            .to_request();
+
+        let resp: actix_web::dev::ServiceResponse = test::call_service(&app, req).await;
+        assert_eq!(resp.status(), 404);
+    }
+
+    #[actix_rt::test]
+    async fn test_get_url_by_id_requires_auth() {
+        let pool = setup_test_pool();
+        let app = setup_test_app(pool).await;
+
+        let req = test::TestRequest::get()
+            .uri("/api/urls/1")
+            .to_request();
+
+        let resp: actix_web::dev::ServiceResponse = test::call_service(&app, req).await;
+        assert_eq!(resp.status(), 401);
+    }
+
+    #[actix_rt::test]
+    async fn test_get_url_stats_endpoint() {
+        let pool = setup_test_pool();
+        let (user, api_key) = services::register_user(&pool, "test@example.com").unwrap();
+
+        let request = CreateUrlRequest {
+            url: "https://example.com".to_string(),
+            custom_code: Some("statstest".to_string()),
+            expires_in_hours: None,
+        };
+        let url = services::create_url(&pool, &request, 7, user.id).unwrap();
+
+        services::record_click(&pool, url.id, Some("127.0.0.1"), None, None).unwrap();
+
+        let app = setup_test_app(pool).await;
+
+        let req = test::TestRequest::get()
+            .uri(&format!("/api/urls/{}/stats", url.id))
+            .insert_header(("X-API-Key", api_key))
+            .to_request();
+
+        let resp: actix_web::dev::ServiceResponse = test::call_service(&app, req).await;
+        assert!(resp.status().is_success());
+
+        let body: serde_json::Value = test::read_body_json(resp).await;
+        assert!(body.get("url").is_some());
+        assert!(body.get("recent_clicks").is_some());
+    }
+
+    #[actix_rt::test]
+    async fn test_delete_url_requires_auth() {
+        let pool = setup_test_pool();
+        let app = setup_test_app(pool).await;
+
+        let req = test::TestRequest::delete()
+            .uri("/api/urls/1")
+            .to_request();
+
+        let resp: actix_web::dev::ServiceResponse = test::call_service(&app, req).await;
+        assert_eq!(resp.status(), 401);
+    }
+
+    // ========================================================================
+    // New Redirect Handler Tests
+    // ========================================================================
+
+    #[actix_rt::test]
+    async fn test_redirect_not_found() {
+        let pool = setup_test_pool();
+        let app = setup_test_app(pool).await;
+
+        let req = test::TestRequest::get()
+            .uri("/nonexistent_code")
+            .to_request();
+
+        let resp: actix_web::dev::ServiceResponse = test::call_service(&app, req).await;
+        assert_eq!(resp.status(), 404);
+    }
+
+    #[actix_rt::test]
+    async fn test_redirect_favicon_returns_404() {
+        let pool = setup_test_pool();
+        let app = setup_test_app(pool).await;
+
+        let req = test::TestRequest::get()
+            .uri("/favicon.ico")
+            .to_request();
+
+        let resp: actix_web::dev::ServiceResponse = test::call_service(&app, req).await;
+        assert_eq!(resp.status(), 404);
+    }
+
+    #[actix_rt::test]
+    async fn test_redirect_robots_txt_returns_404() {
+        let pool = setup_test_pool();
+        let app = setup_test_app(pool).await;
+
+        let req = test::TestRequest::get()
+            .uri("/robots.txt")
+            .to_request();
+
+        let resp: actix_web::dev::ServiceResponse = test::call_service(&app, req).await;
+        assert_eq!(resp.status(), 404);
+    }
+
+    // ========================================================================
+    // New Bulk Handler Tests
+    // ========================================================================
+
+    #[actix_rt::test]
+    async fn test_bulk_delete_requires_auth() {
+        let pool = setup_test_pool();
+        let app = setup_test_app(pool).await;
+
+        let req = test::TestRequest::delete()
+            .uri("/api/urls/bulk")
+            .set_json(serde_json::json!({ "ids": [1, 2, 3] }))
+            .to_request();
+
+        let resp: actix_web::dev::ServiceResponse = test::call_service(&app, req).await;
+        assert_eq!(resp.status(), 401);
+    }
+
+    #[actix_rt::test]
+    async fn test_bulk_create_with_invalid_url_format() {
+        let pool = setup_test_pool();
+        let (_, api_key) = services::register_user(&pool, "test@example.com").unwrap();
+
+        let app = setup_test_app(pool).await;
+
+        let req = test::TestRequest::post()
+            .uri("/api/urls/bulk")
+            .insert_header(("X-API-Key", api_key))
+            .set_json(serde_json::json!({
+                "urls": [
+                    { "url": "not-a-valid-url" }
+                ]
+            }))
+            .to_request();
+
+        let resp: actix_web::dev::ServiceResponse = test::call_service(&app, req).await;
+        assert_eq!(resp.status(), 400);
+    }
+
+    #[actix_rt::test]
+    async fn test_bulk_delete_validates_limit() {
+        let pool = setup_test_pool();
+        let (_, api_key) = services::register_user(&pool, "test@example.com").unwrap();
+
+        let app = setup_test_app(pool).await;
+
+        let ids: Vec<i64> = (1..=101).collect();
+
+        let req = test::TestRequest::delete()
+            .uri("/api/urls/bulk")
+            .insert_header(("X-API-Key", api_key))
+            .set_json(serde_json::json!({ "ids": ids }))
+            .to_request();
+
+        let resp: actix_web::dev::ServiceResponse = test::call_service(&app, req).await;
+        assert_eq!(resp.status(), 400);
+    }
+
+    // ========================================================================
+    // New Tag Handler Tests
+    // ========================================================================
+
+    #[actix_rt::test]
+    async fn test_remove_tag_from_url_endpoint() {
+        let pool = setup_test_pool();
+        let (user, api_key) = services::register_user(&pool, "test@example.com").unwrap();
+
+        let tag = services::create_tag(&pool, "RemoveMe", user.id).unwrap();
+
+        let request = CreateUrlRequest {
+            url: "https://example.com".to_string(),
+            custom_code: Some("rmtag".to_string()),
+            expires_in_hours: None,
+        };
+        let url = services::create_url(&pool, &request, 7, user.id).unwrap();
+        services::add_tag_to_url(&pool, url.id, tag.id, user.id).unwrap();
+
+        let app = setup_test_app(pool).await;
+
+        let req = test::TestRequest::delete()
+            .uri(&format!("/api/urls/{}/tags/{}", url.id, tag.id))
+            .insert_header(("X-API-Key", api_key))
+            .to_request();
+
+        let resp: actix_web::dev::ServiceResponse = test::call_service(&app, req).await;
+        assert!(resp.status().is_success());
+    }
+
+    #[actix_rt::test]
+    async fn test_tag_ownership_isolation() {
+        let pool = setup_test_pool();
+        let (user1, _) = services::register_user(&pool, "user1@example.com").unwrap();
+        let (_, api_key2) = services::register_user(&pool, "user2@example.com").unwrap();
+
+        let tag = services::create_tag(&pool, "Private", user1.id).unwrap();
+
+        let app = setup_test_app(pool).await;
+
+        // User2 tries to delete user1's tag
+        let req = test::TestRequest::delete()
+            .uri(&format!("/api/tags/{}", tag.id))
+            .insert_header(("X-API-Key", api_key2))
+            .to_request();
+
+        let resp: actix_web::dev::ServiceResponse = test::call_service(&app, req).await;
+        assert_eq!(resp.status(), 404);
+    }
+
+    #[actix_rt::test]
+    async fn test_add_tag_to_url_not_found() {
+        let pool = setup_test_pool();
+        let (_, api_key) = services::register_user(&pool, "test@example.com").unwrap();
+
+        let app = setup_test_app(pool).await;
+
+        let req = test::TestRequest::post()
+            .uri("/api/urls/99999/tags")
+            .insert_header(("X-API-Key", api_key))
+            .set_json(serde_json::json!({ "tag_id": 99999 }))
+            .to_request();
+
+        let resp: actix_web::dev::ServiceResponse = test::call_service(&app, req).await;
+        assert_eq!(resp.status(), 404);
+    }
+
+    // ========================================================================
+    // New Analytics Handler Tests
+    // ========================================================================
+
+    #[actix_rt::test]
+    async fn test_analytics_respects_ownership() {
+        let pool = setup_test_pool();
+        let (user1, _) = services::register_user(&pool, "user1@example.com").unwrap();
+        let (_, api_key2) = services::register_user(&pool, "user2@example.com").unwrap();
+
+        let request = CreateUrlRequest {
+            url: "https://example.com".to_string(),
+            custom_code: Some("owned_analytics".to_string()),
+            expires_in_hours: None,
+        };
+        let url = services::create_url(&pool, &request, 7, user1.id).unwrap();
+
+        let app = setup_test_app(pool).await;
+
+        // User2 tries to access user1's analytics
+        let endpoints = [
+            format!("/api/urls/{}/analytics/timeline", url.id),
+            format!("/api/urls/{}/analytics/referrers", url.id),
+            format!("/api/urls/{}/analytics/browsers", url.id),
+            format!("/api/urls/{}/analytics/devices", url.id),
+        ];
+
+        for endpoint in &endpoints {
+            let req = test::TestRequest::get()
+                .uri(endpoint)
+                .insert_header(("X-API-Key", api_key2.clone()))
+                .to_request();
+
+            let resp: actix_web::dev::ServiceResponse = test::call_service(&app, req).await;
+            assert_eq!(resp.status(), 404, "Endpoint {} should deny access to non-owner", endpoint);
+        }
     }
 }
