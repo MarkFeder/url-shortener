@@ -4,7 +4,7 @@
 
 use moka::sync::Cache;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 /// Cached URL data for redirect lookups
 #[derive(Clone, Debug)]
@@ -20,6 +20,7 @@ pub struct CachedUrl {
 pub struct CachedApiKey {
     pub user_id: i64,
     pub key_id: i64,
+    pub last_validated_at: Instant,
 }
 
 /// Application cache combining URL and API key caches
@@ -155,6 +156,7 @@ mod tests {
         let cached_key = CachedApiKey {
             user_id: 1,
             key_id: 42,
+            last_validated_at: Instant::now(),
         };
 
         cache.insert_api_key("hash123", cached_key.clone());
@@ -173,6 +175,7 @@ mod tests {
         let cached_key = CachedApiKey {
             user_id: 1,
             key_id: 42,
+            last_validated_at: Instant::now(),
         };
 
         cache.insert_api_key("hash123", cached_key);

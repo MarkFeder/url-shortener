@@ -1,5 +1,7 @@
 //! User registration and API key management services.
 
+use std::time::Instant;
+
 use rusqlite::params;
 
 use super::helpers::{
@@ -13,6 +15,9 @@ use crate::metrics::AppMetrics;
 use crate::models::{ApiKeyRecord, User};
 use crate::queries::{ApiKeys, Users};
 
+/// Threshold for refreshing last_used_at on cache hits (5 minutes)
+const LAST_USED_REFRESH_THRESHOLD: std::time::Duration = std::time::Duration::from_secs(300);
+
 // ============================================================================
 // User Management
 // ============================================================================
@@ -25,8 +30,7 @@ pub fn register_user(pool: &DbPool, email: &str) -> Result<(User, String), AppEr
 
     // Check if email already exists
     let exists: i32 = conn
-        .query_row(Users::COUNT_BY_EMAIL, params![email], |row| row.get(0))
-        .unwrap_or(0);
+        .query_row(Users::COUNT_BY_EMAIL, params![email], |row| row.get(0))?;
 
     if exists > 0 {
         return Err(AppError::EmailAlreadyExists(format!(
@@ -147,6 +151,22 @@ pub fn validate_api_key_cached_with_metrics(
             m.record_cache_hit("api_key");
             m.record_api_key_validation("success");
         }
+
+        // Refresh last_used_at if stale
+        if cached.last_validated_at.elapsed() > LAST_USED_REFRESH_THRESHOLD {
+            if let Ok(conn) = get_conn(pool) {
+                let _ = conn.execute(ApiKeys::UPDATE_LAST_USED, params![cached.key_id]);
+            }
+            cache.insert_api_key(
+                &key_hash,
+                CachedApiKey {
+                    user_id: cached.user_id,
+                    key_id: cached.key_id,
+                    last_validated_at: Instant::now(),
+                },
+            );
+        }
+
         return Ok((cached.user_id, cached.key_id));
     }
 
@@ -161,7 +181,11 @@ pub fn validate_api_key_cached_with_metrics(
             // Store in cache
             cache.insert_api_key(
                 &key_hash,
-                CachedApiKey { user_id, key_id },
+                CachedApiKey {
+                    user_id,
+                    key_id,
+                    last_validated_at: Instant::now(),
+                },
             );
 
             if let Some(m) = metrics {
@@ -211,8 +235,7 @@ pub fn revoke_api_key_with_cache(
             ApiKeys::COUNT_BY_ID_AND_USER,
             params![key_id, user_id],
             |row| row.get(0),
-        )
-        .unwrap_or(0);
+        )?;
 
     if exists == 0 {
         return Err(AppError::NotFound(format!(
@@ -459,6 +482,57 @@ mod tests {
         assert_eq!(
             metrics.api_key_validations_total.with_label_values(&["invalid"]).get() as u64,
             1
+        );
+    }
+
+    #[test]
+    fn test_cache_hit_updates_last_used_at_after_threshold() {
+        let pool = setup_test_db();
+        let cache = AppCache::default();
+
+        let (user, api_key) = register_user(&pool, "test@example.com").unwrap();
+        let key_hash = hash_api_key(&api_key);
+
+        // Populate cache via a normal validation
+        let (user_id, key_id) = validate_api_key_cached(&pool, &cache, &api_key).unwrap();
+        assert_eq!(user_id, user.id);
+
+        // Manually set last_validated_at to 6 minutes ago to simulate staleness
+        let stale_entry = CachedApiKey {
+            user_id,
+            key_id,
+            last_validated_at: Instant::now() - std::time::Duration::from_secs(360),
+        };
+        cache.insert_api_key(&key_hash, stale_entry);
+
+        // Clear last_used_at in DB so we can detect the refresh
+        let conn = crate::db::get_conn(&pool).unwrap();
+        conn.execute(
+            "UPDATE api_keys SET last_used_at = NULL WHERE id = ?1",
+            params![key_id],
+        )
+        .unwrap();
+
+        // Validate again — should trigger last_used_at refresh
+        let (user_id2, key_id2) = validate_api_key_cached(&pool, &cache, &api_key).unwrap();
+        assert_eq!(user_id2, user.id);
+        assert_eq!(key_id2, key_id);
+
+        // Verify DB last_used_at was updated
+        let last_used: Option<String> = conn
+            .query_row(
+                "SELECT last_used_at FROM api_keys WHERE id = ?1",
+                params![key_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(last_used.is_some(), "last_used_at should have been refreshed");
+
+        // Verify the cached entry was refreshed (last_validated_at should be recent)
+        let cached = cache.get_api_key(&key_hash).unwrap();
+        assert!(
+            cached.last_validated_at.elapsed() < std::time::Duration::from_secs(5),
+            "cached last_validated_at should be recent"
         );
     }
 }

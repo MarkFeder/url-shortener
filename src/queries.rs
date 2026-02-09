@@ -219,6 +219,15 @@ impl Urls {
           AND (?3 IS NULL OR short_code LIKE '%' || ?3 || '%' COLLATE NOCASE)
         ORDER BY created_at DESC
         LIMIT ?4";
+
+    /// Count matching search results (mirrors SEARCH WHERE clause)
+    /// Parameters: ?1 = user_id, ?2 = url_pattern, ?3 = code_pattern
+    pub const COUNT_SEARCH: &'static str = "
+        SELECT COUNT(*)
+        FROM urls
+        WHERE user_id = ?1
+          AND (?2 IS NULL OR original_url LIKE '%' || ?2 || '%' COLLATE NOCASE)
+          AND (?3 IS NULL OR short_code LIKE '%' || ?3 || '%' COLLATE NOCASE)";
 }
 
 /// Click log queries for analytics.

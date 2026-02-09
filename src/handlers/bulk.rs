@@ -22,10 +22,10 @@ pub(super) async fn bulk_create_urls(
     body.validate()
         .map_err(|e| AppError::ValidationError(format!("Invalid input: {}", e)))?;
 
-    // Validate each URL format
+    // Validate each URL format and scheme
     for (index, item) in body.urls.iter().enumerate() {
-        url::Url::parse(&item.url).map_err(|_| {
-            AppError::ValidationError(format!("Invalid URL format at index {}", index))
+        super::urls::validate_http_url(&item.url).map_err(|e| {
+            AppError::ValidationError(format!("{} at index {}", e, index))
         })?;
     }
 

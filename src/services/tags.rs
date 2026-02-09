@@ -18,8 +18,7 @@ pub fn create_tag(pool: &DbPool, name: &str, user_id: i64) -> Result<Tag, AppErr
             Tags::COUNT_BY_NAME_AND_USER,
             params![name, user_id],
             |row| row.get(0),
-        )
-        .unwrap_or(0);
+        )?;
 
     if exists > 0 {
         return Err(AppError::DuplicateCode(format!(
@@ -97,8 +96,7 @@ pub fn add_tag_to_url(
             UrlTags::COUNT_BY_URL_AND_TAG,
             params![url_id, tag_id],
             |row| row.get(0),
-        )
-        .unwrap_or(0);
+        )?;
 
     if already_tagged > 0 {
         return Err(AppError::DuplicateCode(

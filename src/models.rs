@@ -120,7 +120,18 @@ pub struct CreateUrlRequest {
     pub custom_code: Option<String>,
 
     /// Optional expiration time in hours
+    #[validate(custom(function = "validate_positive_hours"))]
     pub expires_in_hours: Option<i64>,
+}
+
+/// Custom validator for positive hours values
+fn validate_positive_hours(hours: i64) -> Result<(), validator::ValidationError> {
+    if hours <= 0 {
+        return Err(validator::ValidationError::new(
+            "expires_in_hours must be a positive number",
+        ));
+    }
+    Ok(())
 }
 
 /// Custom validator for alphanumeric codes (letters, numbers, underscore, hyphen)
@@ -518,6 +529,7 @@ pub struct BulkCreateUrlItem {
     #[validate(custom(function = "validate_alphanumeric"))]
     pub custom_code: Option<String>,
     /// Optional expiration time in hours
+    #[validate(custom(function = "validate_positive_hours"))]
     pub expires_in_hours: Option<i64>,
 }
 

@@ -149,6 +149,14 @@ impl ResponseError for AppError {
 /// Convert rusqlite errors to AppError
 impl From<rusqlite::Error> for AppError {
     fn from(err: rusqlite::Error) -> Self {
+        if let rusqlite::Error::SqliteFailure(sqlite_err, _) = &err {
+            if sqlite_err.code == rusqlite::ErrorCode::ConstraintViolation {
+                log::warn!("Constraint violation: {:?}", err);
+                return AppError::DuplicateCode(
+                    "A record with this value already exists".to_string(),
+                );
+            }
+        }
         log::error!("Database error: {:?}", err);
         AppError::DatabaseError(err.to_string())
     }

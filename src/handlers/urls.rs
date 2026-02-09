@@ -6,7 +6,7 @@ use validator::Validate;
 use crate::auth::AuthenticatedUser;
 use crate::cache::AppCache;
 use crate::config::Config;
-use crate::constants::{DEFAULT_PAGE_LIMIT, DEFAULT_QR_SIZE, MAX_PAGE_LIMIT, MAX_QR_SIZE, MIN_QR_SIZE};
+use crate::constants::{DEFAULT_PAGE_LIMIT, DEFAULT_QR_SIZE, DEFAULT_RECENT_CLICKS_LIMIT, MAX_PAGE_LIMIT, MAX_QR_SIZE, MIN_QR_SIZE};
 use crate::db::DbPool;
 use crate::errors::AppError;
 use crate::metrics::AppMetrics;
@@ -16,6 +16,19 @@ use crate::models::{
 };
 use crate::qr::{self, QrFormat, QrOptions};
 use crate::services;
+
+/// Validate that a URL uses http or https scheme
+pub(super) fn validate_http_url(url_str: &str) -> Result<(), AppError> {
+    let parsed = url::Url::parse(url_str)
+        .map_err(|_| AppError::ValidationError("Invalid URL format".into()))?;
+    match parsed.scheme() {
+        "http" | "https" => Ok(()),
+        scheme => Err(AppError::ValidationError(format!(
+            "URL scheme '{}' is not allowed. Only http and https are supported",
+            scheme
+        ))),
+    }
+}
 
 /// Create a new short URL
 #[post("/shorten")]
@@ -29,8 +42,7 @@ pub(super) async fn create_short_url(
     body.validate()
         .map_err(|e| AppError::ValidationError(format!("Invalid input: {}", e)))?;
 
-    url::Url::parse(&body.url)
-        .map_err(|_| AppError::ValidationError("Invalid URL format".into()))?;
+    validate_http_url(&body.url)?;
 
     let url = services::create_url_with_metrics(
         &pool,
@@ -67,6 +79,13 @@ pub(super) async fn search_urls(
 
     let limit = query.limit.unwrap_or(DEFAULT_PAGE_LIMIT).min(MAX_PAGE_LIMIT);
 
+    let total = services::count_search_urls(
+        &pool,
+        user.user_id,
+        query.q.as_deref(),
+        query.code.as_deref(),
+    )?;
+
     let urls = services::search_urls(
         &pool,
         user.user_id,
@@ -81,7 +100,7 @@ pub(super) async fn search_urls(
         .collect();
 
     let response = UrlListResponse {
-        total: url_responses.len(),
+        total,
         urls: url_responses,
     };
 
@@ -137,7 +156,7 @@ pub(super) async fn get_url_stats(
 ) -> Result<HttpResponse, AppError> {
     let id = path.into_inner();
     let url = services::get_url_by_id(&pool, id, user.user_id)?;
-    let click_logs = services::get_click_logs(&pool, id, 50)?;
+    let click_logs = services::get_click_logs(&pool, id, DEFAULT_RECENT_CLICKS_LIMIT)?;
 
     let response = serde_json::json!({
         "url": UrlResponse::from_url(url, &config.base_url),

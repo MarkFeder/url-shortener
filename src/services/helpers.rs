@@ -85,9 +85,7 @@ pub(super) fn check_ownership(
     id: i64,
     user_id: i64,
 ) -> Result<bool, AppError> {
-    let count: i32 = conn
-        .query_row(query, params![id, user_id], |row| row.get(0))
-        .unwrap_or(0);
+    let count: i32 = conn.query_row(query, params![id, user_id], |row| row.get(0))?;
     Ok(count > 0)
 }
 

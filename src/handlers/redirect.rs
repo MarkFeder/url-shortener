@@ -54,7 +54,10 @@ pub(super) async fn redirect_to_url(
         .and_then(|h| h.to_str().ok())
         .map(|s| s.to_string());
 
-    // Record the click if logging is enabled
+    // Always increment click count
+    let _ = services::increment_clicks(&pool, url.id);
+
+    // Record detailed click log if logging is enabled
     if config.click_logging_enabled {
         let _ = services::record_click(
             &pool,

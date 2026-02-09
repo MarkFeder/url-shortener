@@ -1508,6 +1508,138 @@ mod tests {
     // New Analytics Handler Tests
     // ========================================================================
 
+    // ========================================================================
+    // Expires-in-hours Validation Tests
+    // ========================================================================
+
+    #[actix_rt::test]
+    async fn test_create_url_rejects_negative_expires_in_hours() {
+        let pool = setup_test_pool();
+        let (_, api_key) = services::register_user(&pool, "test@example.com").unwrap();
+
+        let app = setup_test_app(pool).await;
+
+        let req = test::TestRequest::post()
+            .uri("/api/shorten")
+            .insert_header(("X-API-Key", api_key))
+            .set_json(serde_json::json!({
+                "url": "https://example.com",
+                "expires_in_hours": -1
+            }))
+            .to_request();
+
+        let resp: actix_web::dev::ServiceResponse = test::call_service(&app, req).await;
+        assert_eq!(resp.status(), 400);
+    }
+
+    #[actix_rt::test]
+    async fn test_create_url_rejects_zero_expires_in_hours() {
+        let pool = setup_test_pool();
+        let (_, api_key) = services::register_user(&pool, "test@example.com").unwrap();
+
+        let app = setup_test_app(pool).await;
+
+        let req = test::TestRequest::post()
+            .uri("/api/shorten")
+            .insert_header(("X-API-Key", api_key))
+            .set_json(serde_json::json!({
+                "url": "https://example.com",
+                "expires_in_hours": 0
+            }))
+            .to_request();
+
+        let resp: actix_web::dev::ServiceResponse = test::call_service(&app, req).await;
+        assert_eq!(resp.status(), 400);
+    }
+
+    #[actix_rt::test]
+    async fn test_bulk_create_rejects_negative_expires_in_hours() {
+        let pool = setup_test_pool();
+        let (_, api_key) = services::register_user(&pool, "test@example.com").unwrap();
+
+        let app = setup_test_app(pool).await;
+
+        let req = test::TestRequest::post()
+            .uri("/api/urls/bulk")
+            .insert_header(("X-API-Key", api_key))
+            .set_json(serde_json::json!({
+                "urls": [
+                    { "url": "https://example.com", "expires_in_hours": -5 }
+                ]
+            }))
+            .to_request();
+
+        let resp: actix_web::dev::ServiceResponse = test::call_service(&app, req).await;
+        assert_eq!(resp.status(), 400);
+    }
+
+    // ========================================================================
+    // HTTP Scheme Validation Tests
+    // ========================================================================
+
+    #[actix_rt::test]
+    async fn test_create_url_rejects_javascript_scheme() {
+        let pool = setup_test_pool();
+        let (_, api_key) = services::register_user(&pool, "test@example.com").unwrap();
+
+        let app = setup_test_app(pool).await;
+
+        let req = test::TestRequest::post()
+            .uri("/api/shorten")
+            .insert_header(("X-API-Key", api_key))
+            .set_json(serde_json::json!({
+                "url": "javascript:alert(1)"
+            }))
+            .to_request();
+
+        let resp: actix_web::dev::ServiceResponse = test::call_service(&app, req).await;
+        assert_eq!(resp.status(), 400);
+    }
+
+    #[actix_rt::test]
+    async fn test_create_url_rejects_ftp_scheme() {
+        let pool = setup_test_pool();
+        let (_, api_key) = services::register_user(&pool, "test@example.com").unwrap();
+
+        let app = setup_test_app(pool).await;
+
+        let req = test::TestRequest::post()
+            .uri("/api/shorten")
+            .insert_header(("X-API-Key", api_key))
+            .set_json(serde_json::json!({
+                "url": "ftp://files.example.com/file.txt"
+            }))
+            .to_request();
+
+        let resp: actix_web::dev::ServiceResponse = test::call_service(&app, req).await;
+        assert_eq!(resp.status(), 400);
+    }
+
+    #[actix_rt::test]
+    async fn test_bulk_create_rejects_non_http_scheme() {
+        let pool = setup_test_pool();
+        let (_, api_key) = services::register_user(&pool, "test@example.com").unwrap();
+
+        let app = setup_test_app(pool).await;
+
+        let req = test::TestRequest::post()
+            .uri("/api/urls/bulk")
+            .insert_header(("X-API-Key", api_key))
+            .set_json(serde_json::json!({
+                "urls": [
+                    { "url": "data:text/html,<h1>hello</h1>" }
+                ]
+            }))
+            .to_request();
+
+        let resp: actix_web::dev::ServiceResponse = test::call_service(&app, req).await;
+        assert_eq!(resp.status(), 400);
+    }
+
+    // ========================================================================
+    // Analytics Ownership Tests
+    // ========================================================================
+
     #[actix_rt::test]
     async fn test_analytics_respects_ownership() {
         let pool = setup_test_pool();

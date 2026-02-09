@@ -5,7 +5,7 @@ use rusqlite::params;
 
 use super::helpers::{generate_short_code, map_url_row};
 use crate::cache::{AppCache, CachedUrl};
-use crate::constants::{DEFAULT_PAGE_LIMIT, MAX_PAGE_LIMIT};
+use crate::constants::{DEFAULT_PAGE_LIMIT, MAX_CODE_GENERATION_RETRIES, MAX_PAGE_LIMIT};
 use crate::db::{get_conn, DbPool};
 use crate::errors::AppError;
 use crate::metrics::AppMetrics;
@@ -48,11 +48,11 @@ pub fn create_url_with_metrics(
             // Generate unique code with retries
             let mut code = generate_short_code(code_length);
             let mut attempts = 0;
-            while code_exists(&conn, &code)? && attempts < 10 {
+            while code_exists(&conn, &code)? && attempts < MAX_CODE_GENERATION_RETRIES {
                 code = generate_short_code(code_length);
                 attempts += 1;
             }
-            if attempts >= 10 {
+            if attempts >= MAX_CODE_GENERATION_RETRIES {
                 return Err(AppError::InternalError(
                     "Failed to generate unique short code".into(),
                 ));
@@ -266,6 +266,22 @@ pub fn search_urls(
         .collect::<Result<Vec<_>, _>>()?;
 
     Ok(urls)
+}
+
+/// Count search results matching the given criteria
+pub fn count_search_urls(
+    pool: &DbPool,
+    user_id: i64,
+    url_query: Option<&str>,
+    code_query: Option<&str>,
+) -> Result<usize, AppError> {
+    let conn = get_conn(pool)?;
+    let count: i64 = conn.query_row(
+        Urls::COUNT_SEARCH,
+        params![user_id, url_query, code_query],
+        |row| row.get(0),
+    )?;
+    Ok(count as usize)
 }
 
 /// Delete a URL by ID (checks ownership)

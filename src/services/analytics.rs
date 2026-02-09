@@ -74,7 +74,14 @@ pub fn extract_referer_domain(referer: &str) -> Option<String> {
         .and_then(|u| u.host_str().map(|h| h.to_string()))
 }
 
-/// Increment click count and log the click within a transaction
+/// Increment click count for a URL (always called on redirect)
+pub fn increment_clicks(pool: &DbPool, url_id: i64) -> Result<(), AppError> {
+    let conn = get_conn(pool)?;
+    conn.execute(Urls::INCREMENT_CLICKS, params![url_id])?;
+    Ok(())
+}
+
+/// Log click details (called only when click logging is enabled)
 pub fn record_click(
     pool: &DbPool,
     url_id: i64,
@@ -82,7 +89,7 @@ pub fn record_click(
     user_agent: Option<&str>,
     referer: Option<&str>,
 ) -> Result<(), AppError> {
-    let mut conn = get_conn(pool)?;
+    let conn = get_conn(pool)?;
 
     let parsed_ua = user_agent
         .map(parse_user_agent)
@@ -95,11 +102,7 @@ pub fn record_click(
 
     let referer_domain = referer.and_then(extract_referer_domain);
 
-    // Use a transaction to ensure both operations succeed or fail together
-    let tx = conn.transaction()?;
-
-    tx.execute(Urls::INCREMENT_CLICKS, params![url_id])?;
-    tx.execute(
+    conn.execute(
         ClickLogs::INSERT,
         params![
             url_id,
@@ -113,8 +116,6 @@ pub fn record_click(
             referer_domain
         ],
     )?;
-
-    tx.commit()?;
 
     Ok(())
 }
@@ -311,10 +312,33 @@ mod tests {
         let url = create_url(&pool, &request, 7, user.id).unwrap();
         assert_eq!(url.clicks, 0);
 
+        increment_clicks(&pool, url.id).unwrap();
         record_click(&pool, url.id, Some("127.0.0.1"), None, None).unwrap();
 
         let updated = crate::services::get_url_by_id(&pool, url.id, user.id).unwrap();
         assert_eq!(updated.clicks, 1);
+    }
+
+    #[test]
+    fn test_increment_clicks() {
+        let pool = setup_test_db();
+
+        let (user, _) = register_user(&pool, "test@example.com").unwrap();
+
+        let request = CreateUrlRequest {
+            url: "https://example.com".to_string(),
+            custom_code: Some("incr".to_string()),
+            expires_in_hours: None,
+        };
+
+        let url = create_url(&pool, &request, 7, user.id).unwrap();
+        assert_eq!(url.clicks, 0);
+
+        increment_clicks(&pool, url.id).unwrap();
+        increment_clicks(&pool, url.id).unwrap();
+
+        let updated = crate::services::get_url_by_id(&pool, url.id, user.id).unwrap();
+        assert_eq!(updated.clicks, 2);
     }
 
     #[test]
@@ -330,6 +354,7 @@ mod tests {
         let url = create_url(&pool, &request, 7, user.id).unwrap();
 
         // Record a click with a Chrome user agent
+        increment_clicks(&pool, url.id).unwrap();
         record_click(
             &pool,
             url.id,
@@ -362,6 +387,7 @@ mod tests {
 
         // Record a few clicks
         for _ in 0..5 {
+            increment_clicks(&pool, url.id).unwrap();
             record_click(&pool, url.id, Some("127.0.0.1"), None, None).unwrap();
         }
 
@@ -385,9 +411,13 @@ mod tests {
         let url = create_url(&pool, &request, 7, user.id).unwrap();
 
         // Record clicks with different referrers
+        increment_clicks(&pool, url.id).unwrap();
         record_click(&pool, url.id, None, None, Some("https://google.com/search")).unwrap();
+        increment_clicks(&pool, url.id).unwrap();
         record_click(&pool, url.id, None, None, Some("https://google.com/other")).unwrap();
+        increment_clicks(&pool, url.id).unwrap();
         record_click(&pool, url.id, None, None, Some("https://twitter.com/post")).unwrap();
+        increment_clicks(&pool, url.id).unwrap();
         record_click(&pool, url.id, None, None, None).unwrap();
 
         let referrers = get_referrer_breakdown(&pool, url.id, 20).unwrap();
@@ -414,8 +444,11 @@ mod tests {
         let chrome_ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
         let firefox_ua = "Mozilla/5.0 (X11; Linux x86_64; rv:109.0) Gecko/20100101 Firefox/120.0";
 
+        increment_clicks(&pool, url.id).unwrap();
         record_click(&pool, url.id, None, Some(chrome_ua), None).unwrap();
+        increment_clicks(&pool, url.id).unwrap();
         record_click(&pool, url.id, None, Some(chrome_ua), None).unwrap();
+        increment_clicks(&pool, url.id).unwrap();
         record_click(&pool, url.id, None, Some(firefox_ua), None).unwrap();
 
         let browsers = get_browser_breakdown(&pool, url.id, 20).unwrap();
@@ -441,8 +474,11 @@ mod tests {
         let desktop_ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
         let mobile_ua = "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1";
 
+        increment_clicks(&pool, url.id).unwrap();
         record_click(&pool, url.id, None, Some(desktop_ua), None).unwrap();
+        increment_clicks(&pool, url.id).unwrap();
         record_click(&pool, url.id, None, Some(desktop_ua), None).unwrap();
+        increment_clicks(&pool, url.id).unwrap();
         record_click(&pool, url.id, None, Some(mobile_ua), None).unwrap();
 
         let devices = get_device_breakdown(&pool, url.id, 20).unwrap();
