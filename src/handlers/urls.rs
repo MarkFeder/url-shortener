@@ -1,6 +1,6 @@
 //! URL endpoint handlers: CRUD, search, stats, QR code.
 
-use actix_web::{delete, get, post, web, HttpResponse};
+use actix_web::{delete, get, post, put, web, HttpResponse};
 use validator::Validate;
 
 use crate::auth::AuthenticatedUser;
@@ -12,7 +12,7 @@ use crate::errors::AppError;
 use crate::metrics::AppMetrics;
 use crate::models::{
     CreateUrlRequest, CreateUrlResponse, ListUrlsQuery, MessageResponse, QrCodeQuery,
-    SearchUrlsQuery, UrlListResponse, UrlResponse,
+    SearchUrlsQuery, UpdateUrlRequest, UrlListResponse, UrlResponse,
 };
 use crate::qr::{self, QrFormat, QrOptions};
 use crate::services;
@@ -196,6 +196,28 @@ pub(super) async fn get_url_qr_code(
     Ok(HttpResponse::Ok()
         .content_type(format.content_type())
         .body(qr_bytes))
+}
+
+/// Update a URL's destination by ID
+#[put("/urls/{id}")]
+pub(super) async fn update_url_by_id(
+    user: AuthenticatedUser,
+    pool: web::Data<DbPool>,
+    cache: web::Data<AppCache>,
+    config: web::Data<Config>,
+    path: web::Path<i64>,
+    body: web::Json<UpdateUrlRequest>,
+) -> Result<HttpResponse, AppError> {
+    body.validate()
+        .map_err(|e| AppError::ValidationError(format!("Invalid input: {}", e)))?;
+
+    validate_http_url(&body.url)?;
+
+    let id = path.into_inner();
+    let url = services::update_url_with_cache(&pool, Some(&cache), id, user.user_id, &body)?;
+    let response = UrlResponse::from_url(url, &config.base_url);
+
+    Ok(HttpResponse::Ok().json(response))
 }
 
 /// Delete a URL by ID

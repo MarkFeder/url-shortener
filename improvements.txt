@@ -1,0 +1,32 @@
+URL Shortener - All Improvements (Chronological)
+==================================================
+
+ #  | Commit   | Improvement                        | Description
+----|----------|------------------------------------|------------------------------------------------------------
+  1 | a93fbe4  | Initial URL shortener              | Core CRUD endpoints with Actix-web + SQLite + r2d2 pooling
+  2 | 72395e7  | Extract SQL queries module         | Moved inline SQL into dedicated queries.rs for maintainability
+  3 | e60b935  | SQLite WAL mode                    | Enabled Write-Ahead Logging for better read/write concurrency
+  4 | b1f67e3  | Rate limiting                      | Added actix-governor at 60 req/min/IP to prevent abuse
+  5 | d6a782d  | Atomic click recording             | Wrapped click logging in a transaction to prevent partial writes
+  6 | 4370176  | README update                      | Documented current features and API endpoints
+  7 | 244d504  | Remove unused error variant        | Cleaned up dead RateLimitExceeded variant from AppError
+  8 | e5ab008  | API key authentication             | Added X-API-Key header auth for all /api/* endpoints
+  9 | 1687a19  | Docker support                     | Multi-stage Dockerfile for minimal production images
+ 10 | d8d5680  | Per-user auth system               | User registration, usk_-prefixed keys, SHA-256 hashing, URL ownership
+ 11 | bab52f0  | Bulk operations                    | Bulk create and bulk delete endpoints for URLs
+ 12 | cbd4f3d  | SQL query refactor (round 2)       | Moved remaining inline SQL from tags feature into queries.rs
+ 13 | 1fb1765  | Tags/categories                    | Full tagging system - create/list/delete tags, assign to URLs, filter by tag
+ 14 | bebbf3d  | In-memory caching                  | Moka cache for URL redirects and API key validation
+ 15 | 345f4e8  | Prometheus metrics                 | Request counts, latencies, and cache hit/miss tracking
+ 16 | 89165f9  | QR code generation                 | Generate PNG and SVG QR codes for any short URL
+ 17 | 5e16cb4  | Row mapping helpers + N+1 fix      | Extracted reusable row mappers in services, eliminated N+1 query
+ 18 | a5615cb  | Docker Compose                     | Added docker-compose.yml with volume mounts and env config
+ 19 | 770b0dd  | URL search                         | Search/filter URLs by original URL substring or short code
+ 20 | 7a51002  | Constants & test utilities          | Centralized magic numbers into constants.rs, added test_utils.rs
+ 21 | 6de8460  | Standardize pagination             | Consistent defaults and limits across all paginated endpoints
+ 22 | 36a508a  | Enhanced click analytics            | User-agent parsing (browser/OS/device), referer extraction, 4 analytics endpoints, configurable retention
+ 23 | 0b48682  | Module split                       | Split monolithic services.rs and handlers.rs into domain sub-modules + 23 new handler tests
+ 24 | 83cd6f9  | 6 bug fixes + 3 improvements       | Fixed: click toggle suppressing counts, negative expiration, stale last_used_at cache, constraint race -> 500, non-http schemes, masked DB errors. Improved: used constants for retries/limits, accurate search count
+ 25 | (next)   | URL update endpoint (PUT)          | PUT /api/urls/{id} to change destination URL while preserving short_code, clicks, click history, and created_at. Ownership check, http/https validation, cache invalidation, 13 new tests
+
+Total: 30 commits, 192 tests, 27 source files.

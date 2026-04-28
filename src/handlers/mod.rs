@@ -39,6 +39,7 @@ pub fn configure_routes(cfg: &mut web::ServiceConfig) {
             .service(urls::search_urls)
             .service(urls::list_urls)
             .service(urls::get_url_by_id)
+            .service(urls::update_url_by_id)
             .service(urls::delete_url_by_id)
             .service(analytics::get_url_analytics_timeline)
             .service(analytics::get_url_analytics_referrers)
@@ -1672,5 +1673,175 @@ mod tests {
             let resp: actix_web::dev::ServiceResponse = test::call_service(&app, req).await;
             assert_eq!(resp.status(), 404, "Endpoint {} should deny access to non-owner", endpoint);
         }
+    }
+
+    // ========================================================================
+    // URL Update Handler Tests
+    // ========================================================================
+
+    #[actix_rt::test]
+    async fn test_update_url_endpoint() {
+        let pool = setup_test_pool();
+        let (user, api_key) = services::register_user(&pool, "test@example.com").unwrap();
+
+        let request = CreateUrlRequest {
+            url: "https://original.com".to_string(),
+            custom_code: Some("upd_ep".to_string()),
+            expires_in_hours: None,
+        };
+        let url = services::create_url(&pool, &request, 7, user.id).unwrap();
+
+        let app = setup_test_app(pool).await;
+
+        let req = test::TestRequest::put()
+            .uri(&format!("/api/urls/{}", url.id))
+            .insert_header(("X-API-Key", api_key))
+            .set_json(serde_json::json!({ "url": "https://updated.com" }))
+            .to_request();
+
+        let resp: actix_web::dev::ServiceResponse = test::call_service(&app, req).await;
+        assert!(resp.status().is_success());
+
+        let body: UrlResponse = test::read_body_json(resp).await;
+        assert_eq!(body.short_code, "upd_ep");
+        assert_eq!(body.original_url, "https://updated.com");
+    }
+
+    #[actix_rt::test]
+    async fn test_update_url_requires_auth() {
+        let pool = setup_test_pool();
+        let app = setup_test_app(pool).await;
+
+        let req = test::TestRequest::put()
+            .uri("/api/urls/1")
+            .set_json(serde_json::json!({ "url": "https://updated.com" }))
+            .to_request();
+
+        let resp: actix_web::dev::ServiceResponse = test::call_service(&app, req).await;
+        assert_eq!(resp.status(), 401);
+    }
+
+    #[actix_rt::test]
+    async fn test_update_url_not_found() {
+        let pool = setup_test_pool();
+        let (_, api_key) = services::register_user(&pool, "test@example.com").unwrap();
+
+        let app = setup_test_app(pool).await;
+
+        let req = test::TestRequest::put()
+            .uri("/api/urls/99999")
+            .insert_header(("X-API-Key", api_key))
+            .set_json(serde_json::json!({ "url": "https://updated.com" }))
+            .to_request();
+
+        let resp: actix_web::dev::ServiceResponse = test::call_service(&app, req).await;
+        assert_eq!(resp.status(), 404);
+    }
+
+    #[actix_rt::test]
+    async fn test_update_url_respects_ownership() {
+        let pool = setup_test_pool();
+        let (user1, _) = services::register_user(&pool, "user1@example.com").unwrap();
+        let (_, api_key2) = services::register_user(&pool, "user2@example.com").unwrap();
+
+        let request = CreateUrlRequest {
+            url: "https://owned.com".to_string(),
+            custom_code: Some("upd_owned".to_string()),
+            expires_in_hours: None,
+        };
+        let url = services::create_url(&pool, &request, 7, user1.id).unwrap();
+
+        let app = setup_test_app(pool).await;
+
+        let req = test::TestRequest::put()
+            .uri(&format!("/api/urls/{}", url.id))
+            .insert_header(("X-API-Key", api_key2))
+            .set_json(serde_json::json!({ "url": "https://hijack.com" }))
+            .to_request();
+
+        let resp: actix_web::dev::ServiceResponse = test::call_service(&app, req).await;
+        assert_eq!(resp.status(), 404);
+    }
+
+    #[actix_rt::test]
+    async fn test_update_url_rejects_invalid_format() {
+        let pool = setup_test_pool();
+        let (user, api_key) = services::register_user(&pool, "test@example.com").unwrap();
+
+        let request = CreateUrlRequest {
+            url: "https://original.com".to_string(),
+            custom_code: Some("upd_bad".to_string()),
+            expires_in_hours: None,
+        };
+        let url = services::create_url(&pool, &request, 7, user.id).unwrap();
+
+        let app = setup_test_app(pool).await;
+
+        let req = test::TestRequest::put()
+            .uri(&format!("/api/urls/{}", url.id))
+            .insert_header(("X-API-Key", api_key))
+            .set_json(serde_json::json!({ "url": "not-a-valid-url" }))
+            .to_request();
+
+        let resp: actix_web::dev::ServiceResponse = test::call_service(&app, req).await;
+        assert_eq!(resp.status(), 400);
+    }
+
+    #[actix_rt::test]
+    async fn test_update_url_rejects_non_http_scheme() {
+        let pool = setup_test_pool();
+        let (user, api_key) = services::register_user(&pool, "test@example.com").unwrap();
+
+        let request = CreateUrlRequest {
+            url: "https://original.com".to_string(),
+            custom_code: Some("upd_scheme".to_string()),
+            expires_in_hours: None,
+        };
+        let url = services::create_url(&pool, &request, 7, user.id).unwrap();
+
+        let app = setup_test_app(pool).await;
+
+        let req = test::TestRequest::put()
+            .uri(&format!("/api/urls/{}", url.id))
+            .insert_header(("X-API-Key", api_key))
+            .set_json(serde_json::json!({ "url": "javascript:alert(1)" }))
+            .to_request();
+
+        let resp: actix_web::dev::ServiceResponse = test::call_service(&app, req).await;
+        assert_eq!(resp.status(), 400);
+    }
+
+    #[actix_rt::test]
+    async fn test_update_url_preserves_short_code_and_redirects_to_new_destination() {
+        let pool = setup_test_pool();
+        let (user, api_key) = services::register_user(&pool, "test@example.com").unwrap();
+
+        let request = CreateUrlRequest {
+            url: "https://original.com".to_string(),
+            custom_code: Some("upd_redir".to_string()),
+            expires_in_hours: None,
+        };
+        let url = services::create_url(&pool, &request, 7, user.id).unwrap();
+
+        let app = setup_test_app(pool).await;
+
+        // Update destination
+        let req = test::TestRequest::put()
+            .uri(&format!("/api/urls/{}", url.id))
+            .insert_header(("X-API-Key", api_key))
+            .set_json(serde_json::json!({ "url": "https://updated.com" }))
+            .to_request();
+        let resp: actix_web::dev::ServiceResponse = test::call_service(&app, req).await;
+        assert!(resp.status().is_success());
+
+        // Hit the redirect: short_code is unchanged, location should point to new destination
+        let req = test::TestRequest::get()
+            .uri("/upd_redir")
+            .to_request();
+        let resp: actix_web::dev::ServiceResponse = test::call_service(&app, req).await;
+        assert_eq!(resp.status(), 301);
+
+        let location = resp.headers().get("location").unwrap().to_str().unwrap();
+        assert_eq!(location, "https://updated.com");
     }
 }

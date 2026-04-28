@@ -146,6 +146,15 @@ fn validate_alphanumeric(code: &str) -> Result<(), validator::ValidationError> {
     }
 }
 
+/// Request body for updating an existing URL's destination
+#[derive(Debug, Clone, Deserialize, Validate)]
+pub struct UpdateUrlRequest {
+    /// The new destination URL (must be a valid URL)
+    #[validate(url(message = "Invalid URL format"))]
+    #[validate(length(max = 2048, message = "URL is too long (max 2048 characters)"))]
+    pub url: String,
+}
+
 /// Request body for user registration
 #[derive(Debug, Clone, Deserialize, Validate)]
 pub struct RegisterRequest {

@@ -192,6 +192,9 @@ impl Urls {
 
     pub const DELETE_BY_ID_AND_USER: &'static str = "DELETE FROM urls WHERE id = ?1 AND user_id = ?2";
 
+    pub const UPDATE_URL_BY_ID_AND_USER: &'static str =
+        "UPDATE urls SET original_url = ?1, updated_at = datetime('now') WHERE id = ?2 AND user_id = ?3";
+
     pub const SELECT_SHORT_CODE_BY_ID: &'static str = "SELECT short_code FROM urls WHERE id = ?1";
 
     pub const INCREMENT_CLICKS: &'static str =

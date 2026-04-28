@@ -9,7 +9,7 @@ use crate::constants::{DEFAULT_PAGE_LIMIT, MAX_CODE_GENERATION_RETRIES, MAX_PAGE
 use crate::db::{get_conn, DbPool};
 use crate::errors::AppError;
 use crate::metrics::AppMetrics;
-use crate::models::{CreateUrlRequest, ListUrlsQuery, Url};
+use crate::models::{CreateUrlRequest, ListUrlsQuery, UpdateUrlRequest, Url};
 use crate::queries::Urls;
 
 /// Create a new shortened URL
@@ -323,6 +323,64 @@ pub fn delete_url_with_cache(
 
     log::info!("Deleted URL with ID: {} (user: {})", id, user_id);
     Ok(())
+}
+
+/// Update a URL's destination by ID (checks ownership)
+pub fn update_url(
+    pool: &DbPool,
+    id: i64,
+    user_id: i64,
+    request: &UpdateUrlRequest,
+) -> Result<Url, AppError> {
+    update_url_with_cache(pool, None, id, user_id, request)
+}
+
+/// Update a URL's destination with cache invalidation (checks ownership)
+///
+/// Preserves short_code, clicks, click history, created_at, and user_id.
+/// Updates original_url and updated_at.
+pub fn update_url_with_cache(
+    pool: &DbPool,
+    cache: Option<&AppCache>,
+    id: i64,
+    user_id: i64,
+    request: &UpdateUrlRequest,
+) -> Result<Url, AppError> {
+    let conn = get_conn(pool)?;
+
+    // Capture short_code before update for cache invalidation
+    let short_code: Option<String> = if cache.is_some() {
+        conn.query_row(Urls::SELECT_SHORT_CODE_BY_ID, params![id], |row| row.get(0))
+            .ok()
+    } else {
+        None
+    };
+
+    let rows_affected = conn.execute(
+        Urls::UPDATE_URL_BY_ID_AND_USER,
+        params![request.url, id, user_id],
+    )?;
+
+    if rows_affected == 0 {
+        return Err(AppError::NotFound(format!(
+            "URL with ID '{}' not found",
+            id
+        )));
+    }
+
+    if let (Some(cache), Some(code)) = (cache, short_code) {
+        cache.invalidate_url(&code);
+        log::debug!("Invalidated cache for short code: {}", code);
+    }
+
+    log::info!(
+        "Updated URL ID: {} -> {} (user: {})",
+        id,
+        request.url,
+        user_id
+    );
+
+    get_url_by_id(pool, id, user_id)
 }
 
 #[cfg(test)]
@@ -853,5 +911,146 @@ mod tests {
         // Search with limit of 20 (should return all 10)
         let results = search_urls(&pool, user.id, Some("example"), None, 20).unwrap();
         assert_eq!(results.len(), 10);
+    }
+
+    // ========================================================================
+    // Update Tests
+    // ========================================================================
+
+    #[test]
+    fn test_update_url_changes_destination() {
+        let pool = setup_test_db();
+        let (user, _) = register_user(&pool, "test@example.com").unwrap();
+
+        let request = CreateUrlRequest {
+            url: "https://original.com".to_string(),
+            custom_code: Some("upd1".to_string()),
+            expires_in_hours: None,
+        };
+        let created = create_url(&pool, &request, 7, user.id).unwrap();
+
+        let update = UpdateUrlRequest {
+            url: "https://updated.com".to_string(),
+        };
+        let updated = update_url(&pool, created.id, user.id, &update).unwrap();
+
+        assert_eq!(updated.id, created.id);
+        assert_eq!(updated.short_code, "upd1");
+        assert_eq!(updated.original_url, "https://updated.com");
+        assert_eq!(updated.clicks, created.clicks);
+        assert_eq!(updated.created_at, created.created_at);
+    }
+
+    #[test]
+    fn test_update_url_preserves_clicks() {
+        let pool = setup_test_db();
+        let (user, _) = register_user(&pool, "test@example.com").unwrap();
+
+        let request = CreateUrlRequest {
+            url: "https://original.com".to_string(),
+            custom_code: Some("upd_clicks".to_string()),
+            expires_in_hours: None,
+        };
+        let created = create_url(&pool, &request, 7, user.id).unwrap();
+
+        // Bump click count
+        get_conn(&pool)
+            .unwrap()
+            .execute(Urls::INCREMENT_CLICKS, params![created.id])
+            .unwrap();
+
+        let update = UpdateUrlRequest {
+            url: "https://updated.com".to_string(),
+        };
+        let updated = update_url(&pool, created.id, user.id, &update).unwrap();
+
+        assert_eq!(updated.clicks, 1);
+    }
+
+    #[test]
+    fn test_update_url_respects_ownership() {
+        let pool = setup_test_db();
+        let (user1, _) = register_user(&pool, "user1@example.com").unwrap();
+        let (user2, _) = register_user(&pool, "user2@example.com").unwrap();
+
+        let request = CreateUrlRequest {
+            url: "https://owned.com".to_string(),
+            custom_code: Some("owned_upd".to_string()),
+            expires_in_hours: None,
+        };
+        let url = create_url(&pool, &request, 7, user1.id).unwrap();
+
+        let update = UpdateUrlRequest {
+            url: "https://hijack.com".to_string(),
+        };
+        let result = update_url(&pool, url.id, user2.id, &update);
+        assert!(matches!(result, Err(AppError::NotFound(_))));
+
+        // Verify the URL was not modified
+        let unchanged = get_url_by_id(&pool, url.id, user1.id).unwrap();
+        assert_eq!(unchanged.original_url, "https://owned.com");
+    }
+
+    #[test]
+    fn test_update_url_not_found() {
+        let pool = setup_test_db();
+        let (user, _) = register_user(&pool, "test@example.com").unwrap();
+
+        let update = UpdateUrlRequest {
+            url: "https://updated.com".to_string(),
+        };
+        let result = update_url(&pool, 99999, user.id, &update);
+        assert!(matches!(result, Err(AppError::NotFound(_))));
+    }
+
+    #[test]
+    fn test_update_url_invalidates_cache() {
+        let pool = setup_test_db();
+        let cache = AppCache::default();
+        let (user, _) = register_user(&pool, "test@example.com").unwrap();
+
+        let request = CreateUrlRequest {
+            url: "https://original.com".to_string(),
+            custom_code: Some("upd_cache".to_string()),
+            expires_in_hours: None,
+        };
+        let url = create_url(&pool, &request, 7, user.id).unwrap();
+
+        // Populate cache
+        get_url_by_code_cached(&pool, &cache, "upd_cache").unwrap();
+        assert!(cache.get_url("upd_cache").is_some());
+
+        let update = UpdateUrlRequest {
+            url: "https://updated.com".to_string(),
+        };
+        update_url_with_cache(&pool, Some(&cache), url.id, user.id, &update).unwrap();
+
+        // Cache should be invalidated so next lookup hits DB and sees new URL
+        assert!(cache.get_url("upd_cache").is_none());
+        let after = get_url_by_code_cached(&pool, &cache, "upd_cache").unwrap();
+        assert_eq!(after.original_url, "https://updated.com");
+    }
+
+    #[test]
+    fn test_update_url_changes_updated_at() {
+        let pool = setup_test_db();
+        let (user, _) = register_user(&pool, "test@example.com").unwrap();
+
+        let request = CreateUrlRequest {
+            url: "https://original.com".to_string(),
+            custom_code: Some("upd_ts".to_string()),
+            expires_in_hours: None,
+        };
+        let created = create_url(&pool, &request, 7, user.id).unwrap();
+
+        // SQLite datetime('now') has 1-second resolution; sleep so updated_at differs
+        std::thread::sleep(std::time::Duration::from_millis(1100));
+
+        let update = UpdateUrlRequest {
+            url: "https://updated.com".to_string(),
+        };
+        let updated = update_url(&pool, created.id, user.id, &update).unwrap();
+
+        assert_ne!(updated.updated_at, created.updated_at);
     }
 }

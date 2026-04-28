@@ -1,0 +1,88 @@
+URL Shortener - Proposed Features & Refactorings
+=================================================
+(From codebase analysis session, 2026-02-08)
+
+
+PROPOSED FEATURES (8)
+---------------------
+
+1. Custom Aliases / Vanity URLs
+   Allow users to update a short code after creation (currently immutable).
+   Useful for branding and making links memorable.
+
+2. URL Update Endpoint (PUT /api/urls/{id})                    [DONE]
+   Change the destination URL without losing click history or the short code.
+   Implemented with ownership check, http/https validation, and cache
+   invalidation. 6 service-level + 7 handler-level tests added.
+
+3. Link Expiration Management
+   Endpoints to extend, remove, or set expiration on existing URLs,
+   not just at creation time. Gives users control over URL lifecycle.
+
+4. Geo-location Analytics
+   Use a lightweight IP-to-country database (e.g., MaxMindDB/GeoLite2) to add
+   country/region to click logs and a /analytics/geo breakdown endpoint.
+
+5. Webhook Notifications
+   Let users register webhook URLs to receive POST notifications on click
+   milestones (e.g., every 100 clicks). Enables event-driven integrations.
+
+6. API Key Scoping / Permissions
+   Read-only vs read-write API keys, so users can share limited-access keys
+   for dashboards without granting full access.
+
+7. URL Groups / Campaigns
+   Higher-level grouping than tags -- a "campaign" with aggregate analytics
+   across multiple URLs. Useful for marketing campaigns and A/B testing.
+
+8. Export Analytics (CSV)
+   GET /api/urls/{id}/analytics/export?format=csv to download click logs
+   as CSV for offline analysis and reporting.
+
+
+PROPOSED REFACTORINGS (7)
+-------------------------
+
+1. Split services.rs into sub-modules                         [DONE]
+   Break into services/urls.rs, services/auth.rs, etc.
+   Completed in commit 0b48682.
+
+2. Add handler-level integration tests                        [DONE]
+   Cover all 27 endpoints with handler tests.
+   Completed in commit 0b48682 (23 new tests).
+
+3. Async Click Logging
+   Currently every redirect synchronously writes to click_logs in a
+   transaction. For high traffic, batch clicks via an in-memory channel
+   (e.g., tokio::sync::mpsc) and flush periodically.
+
+4. Pagination for Tag URLs
+   GET /api/tags/{id}/urls currently returns all matching URLs with no
+   pagination. Should accept page/limit like /api/urls.
+
+5. Cache Click Counts
+   Redirect lookups hit the cache for the URL but still do a DB write for
+   the click counter increment. A write-back counter cache could reduce
+   DB pressure under high traffic.
+
+6. OpenAPI / Swagger Spec
+   Generate an OpenAPI 3.0 spec (via utoipa or manual YAML) from the
+   existing endpoints. Enables client generation and interactive docs.
+
+7. Graceful Shutdown
+   Ensure in-flight requests complete and any buffered analytics are
+   flushed on SIGTERM. Especially important for the Docker deployment.
+
+
+PRIORITY MATRIX
+---------------
+
+Priority | Item                              | Impact
+---------|-----------------------------------|---------------------
+High     | Split services.rs (sub-modules)   | Maintainability [DONE]
+High     | Handler integration tests         | Reliability [DONE]
+Medium   | URL update endpoint (PUT)         | Feature completeness [DONE]
+Medium   | Pagination for tag URLs           | Consistency
+Medium   | OpenAPI spec                      | Developer experience
+Low      | Async click logging               | Performance at scale
+Low      | Geo-location analytics            | Nice-to-have
