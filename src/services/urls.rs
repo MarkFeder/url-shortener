@@ -3,7 +3,7 @@
 use chrono::{Duration, Utc};
 use rusqlite::params;
 
-use super::helpers::{generate_short_code, map_url_row};
+use super::helpers::generate_short_code;
 use crate::cache::{AppCache, CachedUrl};
 use crate::constants::{DEFAULT_PAGE_LIMIT, MAX_CODE_GENERATION_RETRIES, MAX_PAGE_LIMIT};
 use crate::db::{get_conn, DbPool};
@@ -11,6 +11,20 @@ use crate::errors::AppError;
 use crate::metrics::AppMetrics;
 use crate::models::{CreateUrlRequest, ListUrlsQuery, UpdateUrlRequest, Url};
 use crate::queries::Urls;
+
+/// Map a database row to a Url struct
+pub(super) fn map_url_row(row: &rusqlite::Row) -> rusqlite::Result<Url> {
+    Ok(Url {
+        id: row.get(0)?,
+        short_code: row.get(1)?,
+        original_url: row.get(2)?,
+        clicks: row.get(3)?,
+        created_at: row.get(4)?,
+        updated_at: row.get(5)?,
+        expires_at: row.get(6)?,
+        user_id: row.get(7)?,
+    })
+}
 
 /// Create a new shortened URL
 pub fn create_url(

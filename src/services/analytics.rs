@@ -3,11 +3,27 @@
 use chrono::{Duration, Utc};
 use rusqlite::params;
 
-use super::helpers::map_click_log_row;
 use crate::db::{get_conn, DbPool};
 use crate::errors::AppError;
 use crate::models::{BreakdownEntry, ClickLog, TimelineBucket};
 use crate::queries::{ClickLogs, Urls};
+
+/// Map a database row to a ClickLog struct
+fn map_click_log_row(row: &rusqlite::Row) -> rusqlite::Result<ClickLog> {
+    Ok(ClickLog {
+        id: row.get(0)?,
+        url_id: row.get(1)?,
+        clicked_at: row.get(2)?,
+        ip_address: row.get(3)?,
+        user_agent: row.get(4)?,
+        referer: row.get(5)?,
+        browser: row.get(6)?,
+        browser_version: row.get(7)?,
+        os: row.get(8)?,
+        device_type: row.get(9)?,
+        referer_domain: row.get(10)?,
+    })
+}
 
 /// Parsed user-agent information
 pub struct ParsedUserAgent {

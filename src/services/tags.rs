@@ -2,11 +2,22 @@
 
 use rusqlite::params;
 
-use super::helpers::{check_ownership, map_tag_row, map_url_row};
+use super::helpers::check_ownership;
+use super::urls::map_url_row;
 use crate::db::{get_conn, DbPool};
 use crate::errors::AppError;
 use crate::models::{Tag, Url};
 use crate::queries::{Tags, UrlTags, Urls};
+
+/// Map a database row to a Tag struct
+fn map_tag_row(row: &rusqlite::Row) -> rusqlite::Result<Tag> {
+    Ok(Tag {
+        id: row.get(0)?,
+        name: row.get(1)?,
+        user_id: row.get(2)?,
+        created_at: row.get(3)?,
+    })
+}
 
 /// Create a new tag for a user
 pub fn create_tag(pool: &DbPool, name: &str, user_id: i64) -> Result<Tag, AppError> {

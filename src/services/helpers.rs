@@ -1,6 +1,7 @@
 //! Shared utilities used across all service domains.
 //!
-//! Contains row mapping helpers, ownership checks, and key/code generation.
+//! Contains ownership checks and key/code generation. Row mapping helpers
+//! live next to the domain that owns them (e.g. `services::urls::map_url_row`).
 
 use nanoid::nanoid;
 use rand::Rng;
@@ -9,74 +10,6 @@ use sha2::{Digest, Sha256};
 
 use crate::constants::{API_KEY_PREFIX, API_KEY_RANDOM_LENGTH, SHORT_CODE_ALPHABET};
 use crate::errors::AppError;
-use crate::models::{ApiKeyRecord, ClickLog, Tag, Url, User};
-
-// ============================================================================
-// Row Mapping Helpers
-// ============================================================================
-
-/// Map a database row to a Url struct
-pub(super) fn map_url_row(row: &rusqlite::Row) -> rusqlite::Result<Url> {
-    Ok(Url {
-        id: row.get(0)?,
-        short_code: row.get(1)?,
-        original_url: row.get(2)?,
-        clicks: row.get(3)?,
-        created_at: row.get(4)?,
-        updated_at: row.get(5)?,
-        expires_at: row.get(6)?,
-        user_id: row.get(7)?,
-    })
-}
-
-/// Map a database row to a User struct
-pub(super) fn map_user_row(row: &rusqlite::Row) -> rusqlite::Result<User> {
-    Ok(User {
-        id: row.get(0)?,
-        email: row.get(1)?,
-        created_at: row.get(2)?,
-    })
-}
-
-/// Map a database row to a Tag struct
-pub(super) fn map_tag_row(row: &rusqlite::Row) -> rusqlite::Result<Tag> {
-    Ok(Tag {
-        id: row.get(0)?,
-        name: row.get(1)?,
-        user_id: row.get(2)?,
-        created_at: row.get(3)?,
-    })
-}
-
-/// Map a database row to an ApiKeyRecord struct
-pub(super) fn map_api_key_row(row: &rusqlite::Row) -> rusqlite::Result<ApiKeyRecord> {
-    Ok(ApiKeyRecord {
-        id: row.get(0)?,
-        user_id: row.get(1)?,
-        key_hash: row.get(2)?,
-        name: row.get(3)?,
-        created_at: row.get(4)?,
-        last_used_at: row.get(5)?,
-        is_active: row.get::<_, i32>(6)? == 1,
-    })
-}
-
-/// Map a database row to a ClickLog struct
-pub(super) fn map_click_log_row(row: &rusqlite::Row) -> rusqlite::Result<ClickLog> {
-    Ok(ClickLog {
-        id: row.get(0)?,
-        url_id: row.get(1)?,
-        clicked_at: row.get(2)?,
-        ip_address: row.get(3)?,
-        user_agent: row.get(4)?,
-        referer: row.get(5)?,
-        browser: row.get(6)?,
-        browser_version: row.get(7)?,
-        os: row.get(8)?,
-        device_type: row.get(9)?,
-        referer_domain: row.get(10)?,
-    })
-}
 
 /// Check if a resource exists and belongs to the user
 pub(super) fn check_ownership(

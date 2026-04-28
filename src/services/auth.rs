@@ -4,9 +4,7 @@ use std::time::Instant;
 
 use rusqlite::params;
 
-use super::helpers::{
-    generate_api_key, hash_api_key, map_api_key_row, map_user_row,
-};
+use super::helpers::{generate_api_key, hash_api_key};
 use crate::cache::{AppCache, CachedApiKey};
 use crate::constants::DEFAULT_API_KEY_NAME;
 use crate::db::{get_conn, DbPool};
@@ -17,6 +15,28 @@ use crate::queries::{ApiKeys, Users};
 
 /// Threshold for refreshing last_used_at on cache hits (5 minutes)
 const LAST_USED_REFRESH_THRESHOLD: std::time::Duration = std::time::Duration::from_secs(300);
+
+/// Map a database row to a User struct
+fn map_user_row(row: &rusqlite::Row) -> rusqlite::Result<User> {
+    Ok(User {
+        id: row.get(0)?,
+        email: row.get(1)?,
+        created_at: row.get(2)?,
+    })
+}
+
+/// Map a database row to an ApiKeyRecord struct
+fn map_api_key_row(row: &rusqlite::Row) -> rusqlite::Result<ApiKeyRecord> {
+    Ok(ApiKeyRecord {
+        id: row.get(0)?,
+        user_id: row.get(1)?,
+        key_hash: row.get(2)?,
+        name: row.get(3)?,
+        created_at: row.get(4)?,
+        last_used_at: row.get(5)?,
+        is_active: row.get::<_, i32>(6)? == 1,
+    })
+}
 
 // ============================================================================
 // User Management
