@@ -6,6 +6,7 @@ A fast, lightweight URL shortener built with **Rust**, **Actix-web**, and **SQLi
 
 - ✨ **Create short URLs** from long URLs
 - 🎯 **Custom short codes** - use your own memorable codes
+- ✏️ **Update destination** - change a URL's target without losing the short code or click history
 - ⏰ **Expiring URLs** - set expiration time in hours
 - 📊 **Click tracking** - track clicks with parsed browser, OS, device type, and referer domain
 - 📈 **Analytics** - view click logs, timeline charts, referrer/browser/device breakdowns
@@ -47,7 +48,7 @@ This project demonstrates:
 15. **Query Optimization** - Avoiding N+1 queries with batch loading patterns
 16. **Code Organization** - Row mapping helpers and reusable ownership checks
 17. **Containerization** - Multi-stage Docker builds and docker-compose
-18. **Testing** - Unit and integration tests (148 tests) with shared test utilities
+18. **Testing** - Unit and integration tests (192 tests) with shared test utilities
 19. **Constants Management** - Centralized magic numbers and configuration defaults
 20. **Error Constructors** - Domain-specific error factory methods for cleaner code
 21. **User-Agent Parsing** - Extracting browser, OS, and device type from UA strings with woothee
@@ -67,19 +68,48 @@ url-shortener/
 ├── README.md               # This file
 └── src/
     ├── main.rs             # Application entry point and server setup
-    ├── config.rs           # Configuration management
-    ├── constants.rs        # Centralized application constants
-    ├── db.rs               # Database pool, WAL configuration, and migrations
-    ├── cache.rs            # In-memory caching for URLs and API keys
-    ├── metrics.rs          # Prometheus metrics for monitoring
-    ├── qr.rs               # QR code generation
-    ├── models.rs           # Data structures and DTOs
-    ├── errors.rs           # Custom error types and HTTP response mapping
-    ├── queries.rs          # SQL query constants
-    ├── services.rs         # Business logic layer
-    ├── handlers.rs         # HTTP route handlers
     ├── auth.rs             # API key authentication extractor
-    └── test_utils.rs       # Shared test infrastructure (test-only)
+    ├── test_utils.rs       # Shared test infrastructure (test-only)
+    ├── infra/              # Cross-cutting infrastructure
+    │   ├── cache.rs        # In-memory caching for URLs and API keys
+    │   ├── config.rs       # Configuration management
+    │   ├── constants.rs    # Centralized application constants
+    │   ├── db.rs           # Database pool, WAL configuration, and migrations
+    │   ├── errors.rs       # Custom error types and HTTP response mapping
+    │   ├── metrics.rs      # Prometheus metrics for monitoring
+    │   └── qr.rs           # QR code generation
+    ├── models/             # DTOs and DB entities, split by domain
+    │   ├── db.rs           # Database entity structs
+    │   ├── url.rs          # URL request/response DTOs
+    │   ├── auth.rs         # Auth request/response DTOs
+    │   ├── tag.rs          # Tag request/response DTOs
+    │   ├── analytics.rs    # Analytics query params and responses
+    │   ├── bulk.rs         # Bulk operation DTOs
+    │   ├── qr.rs           # QR code query params
+    │   ├── common.rs       # Shared response wrappers
+    │   └── validators.rs   # Custom validators
+    ├── queries/            # SQL query constants, split by domain
+    │   ├── schema.rs       # Schema DDL and migrations
+    │   ├── users.rs        # User queries
+    │   ├── api_keys.rs     # API key queries
+    │   ├── urls.rs         # URL queries
+    │   ├── click_logs.rs   # Click log queries
+    │   └── tags.rs         # Tag and url_tags queries
+    ├── services/           # Business logic, split by domain
+    │   ├── helpers.rs      # Cross-cutting helpers (ownership, key gen)
+    │   ├── auth.rs         # User registration and API key management
+    │   ├── urls.rs         # URL CRUD, search, caching
+    │   ├── tags.rs         # Tag CRUD and URL-tag associations
+    │   ├── analytics.rs    # Click tracking and aggregation
+    │   └── bulk.rs         # Bulk create/delete
+    └── handlers/           # HTTP route handlers, split by domain
+        ├── auth.rs         # Auth endpoints
+        ├── urls.rs         # URL CRUD endpoints
+        ├── tags.rs         # Tag endpoints
+        ├── analytics.rs    # Analytics endpoints
+        ├── bulk.rs         # Bulk operation endpoints
+        ├── redirect.rs     # Public redirect handler
+        └── health.rs       # Health check
 ```
 
 ## Prerequisites
@@ -336,6 +366,40 @@ X-API-Key: usk_your_key_here
 GET /api/urls/{id}
 X-API-Key: usk_your_key_here
 ```
+
+---
+
+### Update URL Destination (Authenticated)
+
+Change the destination URL while keeping the same short code, click history, and creation timestamp.
+
+```bash
+PUT /api/urls/{id}
+X-API-Key: usk_your_key_here
+Content-Type: application/json
+
+{
+    "url": "https://new-destination.com"
+}
+```
+
+**Response (200 OK):**
+```json
+{
+    "id": 1,
+    "short_code": "abc123",
+    "short_url": "http://localhost:8080/abc123",
+    "original_url": "https://new-destination.com",
+    "clicks": 42,
+    "created_at": "2024-01-01 12:00:00",
+    "updated_at": "2024-01-15 09:00:00",
+    "expires_at": null
+}
+```
+
+> Only the destination is mutable. The short code, click count, click history,
+> and creation timestamp are preserved. The redirect cache is invalidated so
+> the next hit serves the new destination immediately.
 
 ---
 
@@ -1090,6 +1154,12 @@ curl -H "X-API-Key: YOUR_API_KEY" \
 # Get URL details
 curl -H "X-API-Key: YOUR_API_KEY" \
   http://localhost:8080/api/urls/1
+
+# Update a URL's destination (preserves short_code and click history)
+curl -X PUT http://localhost:8080/api/urls/1 \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: YOUR_API_KEY" \
+  -d '{"url": "https://new-destination.com"}'
 
 # Get URL statistics
 curl -H "X-API-Key: YOUR_API_KEY" \
