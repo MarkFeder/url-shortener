@@ -56,8 +56,6 @@ pub fn configure_routes(cfg: &mut web::ServiceConfig) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::infra::cache::AppCache;
-    use crate::infra::config::Config;
     use crate::infra::db::DbPool;
     use crate::models::{
         ApiKeyListResponse, BulkOperationStatus, CreateApiKeyResponse, CreateUrlRequest,

@@ -12,9 +12,6 @@ pub const API_KEY_PREFIX: &str = "usk_";
 /// Length of the random portion of an API key (excluding prefix)
 pub const API_KEY_RANDOM_LENGTH: usize = 32;
 
-/// Length of a SHA-256 hash in hexadecimal characters
-pub const SHA256_HEX_LENGTH: usize = 64;
-
 // ============================================================================
 // Pagination Constants
 // ============================================================================
@@ -24,9 +21,6 @@ pub const DEFAULT_PAGE_LIMIT: u32 = 20;
 
 /// Maximum allowed items per page
 pub const MAX_PAGE_LIMIT: u32 = 100;
-
-/// Default page number (1-indexed)
-pub const DEFAULT_PAGE: u32 = 1;
 
 /// Default sort order for list queries
 pub const DEFAULT_SORT_ORDER: &str = "desc";
@@ -47,25 +41,27 @@ pub const MAX_QR_SIZE: u32 = 1024;
 // ============================================================================
 // URL Validation Constants
 // ============================================================================
+// These are typed `u64` because they are passed through the `validator`
+// crate's `length(min = .., max = ..)` attributes, which require `u64`.
 
 /// Maximum allowed URL length in characters
-pub const MAX_URL_LENGTH: usize = 2048;
+pub const MAX_URL_LENGTH: u64 = 2048;
 
 /// Minimum length for custom short codes
-pub const MIN_CUSTOM_CODE_LENGTH: usize = 3;
+pub const MIN_CUSTOM_CODE_LENGTH: u64 = 3;
 
 /// Maximum length for custom short codes
-pub const MAX_CUSTOM_CODE_LENGTH: usize = 20;
+pub const MAX_CUSTOM_CODE_LENGTH: u64 = 20;
 
 // ============================================================================
 // Bulk Operation Constants
 // ============================================================================
 
 /// Minimum number of items in a bulk operation
-pub const MIN_BULK_ITEMS: usize = 1;
+pub const MIN_BULK_ITEMS: u64 = 1;
 
 /// Maximum number of items in a bulk operation
-pub const MAX_BULK_ITEMS: usize = 100;
+pub const MAX_BULK_ITEMS: u64 = 100;
 
 // ============================================================================
 // Short Code Generation Constants
@@ -86,8 +82,11 @@ pub const MAX_CODE_GENERATION_RETRIES: u32 = 10;
 // API Key Name Constants
 // ============================================================================
 
-/// Maximum length for API key names
-pub const MAX_API_KEY_NAME_LENGTH: usize = 100;
+/// Maximum length for API key names (used by `validator` length attributes)
+pub const MAX_API_KEY_NAME_LENGTH: u64 = 100;
+
+/// Maximum length for user email addresses (used by `validator` length attributes)
+pub const MAX_EMAIL_LENGTH: u64 = 255;
 
 /// Default name for the first API key created during registration
 pub const DEFAULT_API_KEY_NAME: &str = "Default key";
@@ -96,18 +95,12 @@ pub const DEFAULT_API_KEY_NAME: &str = "Default key";
 // Tag Constants
 // ============================================================================
 
-/// Maximum length for tag names
-pub const MAX_TAG_NAME_LENGTH: usize = 50;
+/// Maximum length for tag names (used by `validator` length attributes)
+pub const MAX_TAG_NAME_LENGTH: u64 = 50;
 
 // ============================================================================
 // Click Tracking Constants
 // ============================================================================
-
-/// Whether click logging is enabled by default
-pub const DEFAULT_CLICK_LOGGING_ENABLED: bool = true;
-
-/// Default retention period for click logs (None = keep forever)
-pub const DEFAULT_CLICK_RETENTION_DAYS: Option<u64> = None;
 
 /// Default limit for recent clicks in stats endpoint
 pub const DEFAULT_RECENT_CLICKS_LIMIT: u32 = 50;
@@ -139,7 +132,6 @@ mod tests {
     #[test]
     fn test_pagination_constants() {
         assert!(DEFAULT_PAGE_LIMIT <= MAX_PAGE_LIMIT);
-        assert!(DEFAULT_PAGE >= 1);
     }
 
     #[test]

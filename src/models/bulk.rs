@@ -5,16 +5,23 @@ use validator::Validate;
 
 use super::url::CreateUrlResponse;
 use super::validators::{validate_alphanumeric, validate_positive_hours};
+use crate::infra::constants::{
+    MAX_BULK_ITEMS, MAX_CUSTOM_CODE_LENGTH, MAX_URL_LENGTH, MIN_BULK_ITEMS, MIN_CUSTOM_CODE_LENGTH,
+};
 
 /// Single item in a bulk create request
 #[derive(Debug, Clone, Serialize, Deserialize, Validate)]
 pub struct BulkCreateUrlItem {
     /// The URL to shorten (must be a valid URL)
     #[validate(url(message = "Invalid URL format"))]
-    #[validate(length(max = 2048, message = "URL is too long"))]
+    #[validate(length(max = MAX_URL_LENGTH, message = "URL is too long"))]
     pub url: String,
     /// Optional custom short code
-    #[validate(length(min = 3, max = 20, message = "Custom code must be 3-20 characters"))]
+    #[validate(length(
+        min = MIN_CUSTOM_CODE_LENGTH,
+        max = MAX_CUSTOM_CODE_LENGTH,
+        message = "Custom code length is out of range"
+    ))]
     #[validate(custom(function = "validate_alphanumeric"))]
     pub custom_code: Option<String>,
     /// Optional expiration time in hours
@@ -25,8 +32,8 @@ pub struct BulkCreateUrlItem {
 /// Request body for bulk creating URLs
 #[derive(Debug, Clone, Deserialize, Validate)]
 pub struct BulkCreateUrlRequest {
-    /// List of URLs to create (1-100)
-    #[validate(length(min = 1, max = 100, message = "Must provide 1-100 URLs"))]
+    /// List of URLs to create
+    #[validate(length(min = MIN_BULK_ITEMS, max = MAX_BULK_ITEMS, message = "Bulk size is out of range"))]
     #[validate(nested)]
     pub urls: Vec<BulkCreateUrlItem>,
 }
@@ -34,8 +41,8 @@ pub struct BulkCreateUrlRequest {
 /// Request body for bulk deleting URLs
 #[derive(Debug, Clone, Deserialize, Validate)]
 pub struct BulkDeleteUrlRequest {
-    /// List of URL IDs to delete (1-100)
-    #[validate(length(min = 1, max = 100, message = "Must provide 1-100 IDs"))]
+    /// List of URL IDs to delete
+    #[validate(length(min = MIN_BULK_ITEMS, max = MAX_BULK_ITEMS, message = "Bulk size is out of range"))]
     pub ids: Vec<i64>,
 }
 

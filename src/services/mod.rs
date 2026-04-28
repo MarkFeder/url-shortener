@@ -10,7 +10,6 @@ mod analytics;
 mod bulk;
 mod tags;
 
-pub use helpers::{generate_short_code, generate_api_key, hash_api_key};
 pub use auth::*;
 pub use urls::*;
 pub use analytics::*;

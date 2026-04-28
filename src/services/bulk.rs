@@ -104,17 +104,6 @@ pub fn bulk_create_urls(
     })
 }
 
-/// Bulk delete multiple URLs by ID
-///
-/// Processes each deletion individually, collecting successes and failures.
-pub fn bulk_delete_urls(
-    pool: &DbPool,
-    ids: &[i64],
-    user_id: i64,
-) -> Result<BulkDeleteUrlResponse, AppError> {
-    bulk_delete_urls_with_cache(pool, None, ids, user_id)
-}
-
 /// Bulk delete multiple URLs by ID with cache invalidation
 ///
 /// Processes each deletion individually, collecting successes and failures.
@@ -329,7 +318,7 @@ mod tests {
         }
 
         // Bulk delete
-        let response = bulk_delete_urls(&pool, &ids, user.id).unwrap();
+        let response = bulk_delete_urls_with_cache(&pool, None, &ids, user.id).unwrap();
 
         assert_eq!(response.status, BulkOperationStatus::Success);
         assert_eq!(response.total, 3);
@@ -359,7 +348,7 @@ mod tests {
 
         // Try to delete existing + non-existing
         let ids = vec![url.id, 99999, 99998];
-        let response = bulk_delete_urls(&pool, &ids, user.id).unwrap();
+        let response = bulk_delete_urls_with_cache(&pool, None, &ids, user.id).unwrap();
 
         assert_eq!(response.status, BulkOperationStatus::PartialSuccess);
         assert_eq!(response.total, 3);
@@ -391,7 +380,7 @@ mod tests {
         let url = create_url(&pool, &request, 7, user1.id).unwrap();
 
         // User2 tries to bulk delete user1's URL
-        let response = bulk_delete_urls(&pool, &[url.id], user2.id).unwrap();
+        let response = bulk_delete_urls_with_cache(&pool, None, &[url.id], user2.id).unwrap();
 
         assert_eq!(response.status, BulkOperationStatus::Failed);
         assert_eq!(response.failed, 1);
@@ -420,7 +409,7 @@ mod tests {
             ids.push(url.id);
 
             // Populate the cache
-            crate::services::get_url_by_code_cached(&pool, &cache, &format!("bulk_cache_{}", i)).unwrap();
+            crate::services::get_url_by_code_cached_with_metrics(&pool, &cache, &format!("bulk_cache_{}", i), None).unwrap();
         }
 
         // Verify all are cached

@@ -4,12 +4,13 @@ use serde::{Deserialize, Serialize};
 use validator::Validate;
 
 use super::db::Tag;
+use crate::infra::constants::MAX_TAG_NAME_LENGTH;
 
 /// Request body for creating a new tag
 #[derive(Debug, Clone, Deserialize, Validate)]
 pub struct CreateTagRequest {
-    /// Tag name (1-50 characters)
-    #[validate(length(min = 1, max = 50, message = "Tag name must be 1-50 characters"))]
+    /// Tag name
+    #[validate(length(min = 1, max = MAX_TAG_NAME_LENGTH, message = "Tag name length is out of range"))]
     pub name: String,
 }
 

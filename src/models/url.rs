@@ -5,18 +5,25 @@ use validator::Validate;
 
 use super::db::Url;
 use super::validators::{validate_alphanumeric, validate_positive_hours};
-use crate::infra::constants::{DEFAULT_PAGE_LIMIT, DEFAULT_SORT_ORDER};
+use crate::infra::constants::{
+    DEFAULT_PAGE_LIMIT, DEFAULT_SORT_ORDER, MAX_CUSTOM_CODE_LENGTH, MAX_URL_LENGTH,
+    MIN_CUSTOM_CODE_LENGTH,
+};
 
 /// Request body for creating a new short URL
 #[derive(Debug, Clone, Deserialize, Validate)]
 pub struct CreateUrlRequest {
     /// The URL to shorten (must be a valid URL)
     #[validate(url(message = "Invalid URL format"))]
-    #[validate(length(max = 2048, message = "URL is too long (max 2048 characters)"))]
+    #[validate(length(max = MAX_URL_LENGTH, message = "URL is too long"))]
     pub url: String,
 
     /// Optional custom short code
-    #[validate(length(min = 3, max = 20, message = "Custom code must be 3-20 characters"))]
+    #[validate(length(
+        min = MIN_CUSTOM_CODE_LENGTH,
+        max = MAX_CUSTOM_CODE_LENGTH,
+        message = "Custom code length is out of range"
+    ))]
     #[validate(custom(function = "validate_alphanumeric"))]
     pub custom_code: Option<String>,
 
@@ -30,7 +37,7 @@ pub struct CreateUrlRequest {
 pub struct UpdateUrlRequest {
     /// The new destination URL (must be a valid URL)
     #[validate(url(message = "Invalid URL format"))]
-    #[validate(length(max = 2048, message = "URL is too long (max 2048 characters)"))]
+    #[validate(length(max = MAX_URL_LENGTH, message = "URL is too long"))]
     pub url: String,
 }
 

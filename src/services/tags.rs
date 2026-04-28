@@ -168,48 +168,6 @@ pub fn remove_tag_from_url(
     Ok(())
 }
 
-/// Get all tags for a URL
-pub fn get_tags_for_url(pool: &DbPool, url_id: i64, user_id: i64) -> Result<Vec<Tag>, AppError> {
-    let conn = get_conn(pool)?;
-
-    // Verify the URL belongs to the user
-    if !check_ownership(&conn, Urls::COUNT_BY_ID_AND_USER, url_id, user_id)? {
-        return Err(AppError::NotFound(format!(
-            "URL with ID '{}' not found",
-            url_id
-        )));
-    }
-
-    let mut stmt = conn.prepare(UrlTags::SELECT_TAGS_BY_URL)?;
-
-    let tags = stmt
-        .query_map(params![url_id], map_tag_row)?
-        .collect::<Result<Vec<_>, _>>()?;
-
-    Ok(tags)
-}
-
-/// Get all URLs with a specific tag
-pub fn get_urls_by_tag(pool: &DbPool, tag_id: i64, user_id: i64) -> Result<Vec<Url>, AppError> {
-    let conn = get_conn(pool)?;
-
-    // Verify the tag belongs to the user
-    if !check_ownership(&conn, Tags::COUNT_BY_ID_AND_USER, tag_id, user_id)? {
-        return Err(AppError::NotFound(format!(
-            "Tag with ID '{}' not found",
-            tag_id
-        )));
-    }
-
-    let mut stmt = conn.prepare(UrlTags::SELECT_URLS_BY_TAG)?;
-
-    let urls = stmt
-        .query_map(params![tag_id, user_id], map_url_row)?
-        .collect::<Result<Vec<_>, _>>()?;
-
-    Ok(urls)
-}
-
 /// Get all URLs with a specific tag, including all tags for each URL
 /// This is an optimized version that avoids N+1 queries by fetching all tags
 /// for the URLs in a single additional query.
@@ -360,10 +318,12 @@ mod tests {
         // Add tag to URL
         add_tag_to_url(&pool, url.id, tag.id, user.id).unwrap();
 
-        // Verify tag is associated
-        let tags = get_tags_for_url(&pool, url.id, user.id).unwrap();
-        assert_eq!(tags.len(), 1);
-        assert_eq!(tags[0].name, "Important");
+        // Verify tag is associated by listing URLs for that tag
+        let tagged = get_urls_by_tag_with_tags(&pool, tag.id, user.id).unwrap();
+        assert_eq!(tagged.len(), 1);
+        assert_eq!(tagged[0].0.id, url.id);
+        assert_eq!(tagged[0].1.len(), 1);
+        assert_eq!(tagged[0].1[0].name, "Important");
     }
 
     #[test]
@@ -408,9 +368,9 @@ mod tests {
         add_tag_to_url(&pool, url.id, tag.id, user.id).unwrap();
         remove_tag_from_url(&pool, url.id, tag.id, user.id).unwrap();
 
-        // Verify tag is removed
-        let tags = get_tags_for_url(&pool, url.id, user.id).unwrap();
-        assert!(tags.is_empty());
+        // Verify tag is removed: URL no longer appears for this tag
+        let tagged = get_urls_by_tag_with_tags(&pool, tag.id, user.id).unwrap();
+        assert!(tagged.iter().all(|(u, _)| u.id != url.id));
     }
 
     #[test]
@@ -448,11 +408,11 @@ mod tests {
         add_tag_to_url(&pool, url3.id, other_tag.id, user.id).unwrap();
 
         // Get URLs by "Work" tag
-        let work_urls = get_urls_by_tag(&pool, tag.id, user.id).unwrap();
+        let work_urls = get_urls_by_tag_with_tags(&pool, tag.id, user.id).unwrap();
         assert_eq!(work_urls.len(), 2);
 
         // Get URLs by "Personal" tag
-        let personal_urls = get_urls_by_tag(&pool, other_tag.id, user.id).unwrap();
+        let personal_urls = get_urls_by_tag_with_tags(&pool, other_tag.id, user.id).unwrap();
         assert_eq!(personal_urls.len(), 1);
     }
 
@@ -533,11 +493,13 @@ mod tests {
         // Add tag to URL
         add_tag_to_url(&pool, url.id, tag.id, user.id).unwrap();
 
-        // Delete the tag
-        delete_tag(&pool, tag.id, user.id).unwrap();
+        let tag_id = tag.id;
 
-        // URL should have no tags now
-        let tags = get_tags_for_url(&pool, url.id, user.id).unwrap();
-        assert!(tags.is_empty());
+        // Delete the tag
+        delete_tag(&pool, tag_id, user.id).unwrap();
+
+        // Tag is gone (cascade removed the url_tags row too)
+        let result = get_urls_by_tag_with_tags(&pool, tag_id, user.id);
+        assert!(matches!(result, Err(AppError::NotFound(_))));
     }
 }

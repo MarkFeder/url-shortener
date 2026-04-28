@@ -215,7 +215,7 @@ mod tests {
 
         // Create and then revoke a key
         let (record, api_key) = services::create_api_key(&pool, user.id, "To Revoke").unwrap();
-        services::revoke_api_key(&pool, user.id, record.id).unwrap();
+        services::revoke_api_key_with_cache(&pool, None, user.id, record.id).unwrap();
 
         let app = test::init_service(
             App::new()

@@ -23,9 +23,6 @@ impl ApiKeys {
     pub const UPDATE_LAST_USED: &'static str =
         "UPDATE api_keys SET last_used_at = datetime('now') WHERE id = ?1";
 
-    pub const SELECT_BY_ID_AND_USER: &'static str =
-        "SELECT id, user_id, key_hash, name, created_at, last_used_at, is_active FROM api_keys WHERE id = ?1 AND user_id = ?2";
-
     pub const SELECT_BY_ID: &'static str =
         "SELECT id, user_id, key_hash, name, created_at, last_used_at, is_active FROM api_keys WHERE id = ?1";
 

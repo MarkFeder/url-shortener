@@ -61,7 +61,11 @@ pub struct User {
     pub created_at: String,
 }
 
-/// Represents an API key record in the database
+/// Represents an API key record in the database.
+///
+/// `user_id` and `key_hash` are populated by the row mapper for completeness
+/// but no caller currently reads them after construction.
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct ApiKeyRecord {
     /// Unique identifier

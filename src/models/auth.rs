@@ -4,13 +4,14 @@ use serde::{Deserialize, Serialize};
 use validator::Validate;
 
 use super::db::ApiKeyRecord;
+use crate::infra::constants::{MAX_API_KEY_NAME_LENGTH, MAX_EMAIL_LENGTH};
 
 /// Request body for user registration
 #[derive(Debug, Clone, Deserialize, Validate)]
 pub struct RegisterRequest {
     /// Email address (must be valid format)
     #[validate(email(message = "Invalid email format"))]
-    #[validate(length(max = 255, message = "Email is too long (max 255 characters)"))]
+    #[validate(length(max = MAX_EMAIL_LENGTH, message = "Email is too long"))]
     pub email: String,
 }
 
@@ -18,7 +19,7 @@ pub struct RegisterRequest {
 #[derive(Debug, Clone, Deserialize, Validate)]
 pub struct CreateApiKeyRequest {
     /// Human-readable name for the key
-    #[validate(length(min = 1, max = 100, message = "Name must be 1-100 characters"))]
+    #[validate(length(min = 1, max = MAX_API_KEY_NAME_LENGTH, message = "Name length is out of range"))]
     pub name: String,
 }
 

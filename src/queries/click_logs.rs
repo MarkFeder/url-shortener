@@ -62,14 +62,6 @@ impl ClickLogs {
         ORDER BY count DESC
         LIMIT ?2";
 
-    pub const OS_BREAKDOWN: &'static str = "
-        SELECT COALESCE(os, 'unknown') AS name, COUNT(*) AS count
-        FROM click_logs
-        WHERE url_id = ?1
-        GROUP BY name
-        ORDER BY count DESC
-        LIMIT ?2";
-
     pub const DELETE_BEFORE: &'static str =
         "DELETE FROM click_logs WHERE clicked_at < ?1";
 }

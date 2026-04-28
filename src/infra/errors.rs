@@ -7,7 +7,13 @@ use std::fmt;
 
 use crate::models::ErrorResponse;
 
-/// Application-level errors
+/// Application-level errors.
+///
+/// `Forbidden` is intentionally retained as a public variant. Current
+/// ownership-violation paths return `NotFound` to avoid leaking the existence
+/// of resources owned by other users; future endpoints with public-discovery
+/// semantics (e.g., shared campaigns) may return `Forbidden` instead.
+#[allow(dead_code)]
 #[derive(Debug)]
 pub enum AppError {
     /// URL was not found
@@ -51,7 +57,11 @@ impl std::error::Error for AppError {}
 // ============================================================================
 // Constructor Methods
 // ============================================================================
+// Constructors are retained as a public, ergonomic factory API for handler
+// and service code that wants to produce well-formed error messages without
+// repeating format strings.
 
+#[allow(dead_code)]
 impl AppError {
     /// Create a NotFound error for a URL
     pub fn url_not_found(short_code: &str) -> Self {

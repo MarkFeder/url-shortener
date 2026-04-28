@@ -12,21 +12,13 @@ impl Urls {
         SELECT id, short_code, original_url, clicks, created_at, updated_at, expires_at, user_id
         FROM urls WHERE short_code = ?1";
 
-    pub const SELECT_BY_ID: &'static str = "
-        SELECT id, short_code, original_url, clicks, created_at, updated_at, expires_at, user_id
-        FROM urls WHERE id = ?1";
-
     pub const SELECT_BY_ID_AND_USER: &'static str = "
         SELECT id, short_code, original_url, clicks, created_at, updated_at, expires_at, user_id
         FROM urls WHERE id = ?1 AND user_id = ?2";
 
     pub const COUNT_BY_CODE: &'static str = "SELECT COUNT(*) FROM urls WHERE short_code = ?1";
 
-    pub const COUNT_ALL: &'static str = "SELECT COUNT(*) FROM urls";
-
     pub const COUNT_BY_USER: &'static str = "SELECT COUNT(*) FROM urls WHERE user_id = ?1";
-
-    pub const DELETE_BY_ID: &'static str = "DELETE FROM urls WHERE id = ?1";
 
     pub const DELETE_BY_ID_AND_USER: &'static str = "DELETE FROM urls WHERE id = ?1 AND user_id = ?2";
 

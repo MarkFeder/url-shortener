@@ -139,18 +139,6 @@ pub fn get_url_by_code(pool: &DbPool, short_code: &str) -> Result<Url, AppError>
     Ok(url)
 }
 
-/// Get a URL by its short code with caching (for redirects - no ownership check)
-///
-/// Checks the cache first, then falls back to the database on cache miss.
-/// Also checks expiration on cache hits and invalidates expired entries.
-pub fn get_url_by_code_cached(
-    pool: &DbPool,
-    cache: &AppCache,
-    short_code: &str,
-) -> Result<Url, AppError> {
-    get_url_by_code_cached_with_metrics(pool, cache, short_code, None)
-}
-
 /// Get a URL by its short code with caching and optional metrics recording
 ///
 /// Checks the cache first, then falls back to the database on cache miss.
@@ -298,11 +286,6 @@ pub fn count_search_urls(
     Ok(count as usize)
 }
 
-/// Delete a URL by ID (checks ownership)
-pub fn delete_url(pool: &DbPool, id: i64, user_id: i64) -> Result<(), AppError> {
-    delete_url_with_cache(pool, None, id, user_id)
-}
-
 /// Delete a URL by ID with cache invalidation (checks ownership)
 pub fn delete_url_with_cache(
     pool: &DbPool,
@@ -337,16 +320,6 @@ pub fn delete_url_with_cache(
 
     log::info!("Deleted URL with ID: {} (user: {})", id, user_id);
     Ok(())
-}
-
-/// Update a URL's destination by ID (checks ownership)
-pub fn update_url(
-    pool: &DbPool,
-    id: i64,
-    user_id: i64,
-    request: &UpdateUrlRequest,
-) -> Result<Url, AppError> {
-    update_url_with_cache(pool, None, id, user_id, request)
 }
 
 /// Update a URL's destination with cache invalidation (checks ownership)
@@ -502,11 +475,11 @@ mod tests {
         let url = create_url(&pool, &request, 7, user1.id).unwrap();
 
         // User 2 cannot delete User 1's URL
-        let result = delete_url(&pool, url.id, user2.id);
+        let result = delete_url_with_cache(&pool, None, url.id, user2.id);
         assert!(matches!(result, Err(AppError::NotFound(_))));
 
         // User 1 can delete their URL
-        delete_url(&pool, url.id, user1.id).unwrap();
+        delete_url_with_cache(&pool, None, url.id, user1.id).unwrap();
 
         // URL should be gone
         let result = get_url_by_code(&pool, "delete_test");
@@ -529,14 +502,14 @@ mod tests {
 
         // First call - cache miss, should query database
         assert!(cache.get_url("cached1").is_none());
-        let url1 = get_url_by_code_cached(&pool, &cache, "cached1").unwrap();
+        let url1 = get_url_by_code_cached_with_metrics(&pool, &cache, "cached1", None).unwrap();
         assert_eq!(url1.original_url, "https://example.com");
 
         // Verify it's now in the cache
         assert!(cache.get_url("cached1").is_some());
 
         // Second call - cache hit
-        let url2 = get_url_by_code_cached(&pool, &cache, "cached1").unwrap();
+        let url2 = get_url_by_code_cached_with_metrics(&pool, &cache, "cached1", None).unwrap();
         assert_eq!(url2.original_url, "https://example.com");
         assert_eq!(url2.id, url1.id);
     }
@@ -547,7 +520,7 @@ mod tests {
         let cache = AppCache::default();
 
         // Try to get a non-existent URL
-        let result = get_url_by_code_cached(&pool, &cache, "nonexistent");
+        let result = get_url_by_code_cached_with_metrics(&pool, &cache, "nonexistent", None);
         assert!(matches!(result, Err(AppError::NotFound(_))));
 
         // Should not be cached
@@ -569,7 +542,7 @@ mod tests {
         let url = create_url(&pool, &request, 7, user.id).unwrap();
 
         // Populate the cache
-        get_url_by_code_cached(&pool, &cache, "todelete").unwrap();
+        get_url_by_code_cached_with_metrics(&pool, &cache, "todelete", None).unwrap();
         assert!(cache.get_url("todelete").is_some());
 
         // Delete with cache invalidation
@@ -579,7 +552,7 @@ mod tests {
         assert!(cache.get_url("todelete").is_none());
 
         // Should return not found now
-        let result = get_url_by_code_cached(&pool, &cache, "todelete");
+        let result = get_url_by_code_cached_with_metrics(&pool, &cache, "todelete", None);
         assert!(matches!(result, Err(AppError::NotFound(_))));
     }
 
@@ -614,7 +587,7 @@ mod tests {
             );
 
             // Should detect expiration on cache hit and return error
-            let result = get_url_by_code_cached(&pool, &cache, "expired_cache");
+            let result = get_url_by_code_cached_with_metrics(&pool, &cache, "expired_cache", None);
             assert!(matches!(result, Err(AppError::ExpiredUrl(_))));
 
             // Cache entry should be invalidated after detecting expiration
@@ -637,7 +610,7 @@ mod tests {
         let created_url = create_url(&pool, &request, 7, user.id).unwrap();
 
         // Populate cache
-        get_url_by_code_cached(&pool, &cache, "specific123").unwrap();
+        get_url_by_code_cached_with_metrics(&pool, &cache, "specific123", None).unwrap();
 
         // Verify cached data is correct
         let cached = cache.get_url("specific123").unwrap();
@@ -946,7 +919,7 @@ mod tests {
         let update = UpdateUrlRequest {
             url: "https://updated.com".to_string(),
         };
-        let updated = update_url(&pool, created.id, user.id, &update).unwrap();
+        let updated = update_url_with_cache(&pool, None, created.id, user.id, &update).unwrap();
 
         assert_eq!(updated.id, created.id);
         assert_eq!(updated.short_code, "upd1");
@@ -976,7 +949,7 @@ mod tests {
         let update = UpdateUrlRequest {
             url: "https://updated.com".to_string(),
         };
-        let updated = update_url(&pool, created.id, user.id, &update).unwrap();
+        let updated = update_url_with_cache(&pool, None, created.id, user.id, &update).unwrap();
 
         assert_eq!(updated.clicks, 1);
     }
@@ -997,7 +970,7 @@ mod tests {
         let update = UpdateUrlRequest {
             url: "https://hijack.com".to_string(),
         };
-        let result = update_url(&pool, url.id, user2.id, &update);
+        let result = update_url_with_cache(&pool, None, url.id, user2.id, &update);
         assert!(matches!(result, Err(AppError::NotFound(_))));
 
         // Verify the URL was not modified
@@ -1013,7 +986,7 @@ mod tests {
         let update = UpdateUrlRequest {
             url: "https://updated.com".to_string(),
         };
-        let result = update_url(&pool, 99999, user.id, &update);
+        let result = update_url_with_cache(&pool, None, 99999, user.id, &update);
         assert!(matches!(result, Err(AppError::NotFound(_))));
     }
 
@@ -1031,7 +1004,7 @@ mod tests {
         let url = create_url(&pool, &request, 7, user.id).unwrap();
 
         // Populate cache
-        get_url_by_code_cached(&pool, &cache, "upd_cache").unwrap();
+        get_url_by_code_cached_with_metrics(&pool, &cache, "upd_cache", None).unwrap();
         assert!(cache.get_url("upd_cache").is_some());
 
         let update = UpdateUrlRequest {
@@ -1041,7 +1014,7 @@ mod tests {
 
         // Cache should be invalidated so next lookup hits DB and sees new URL
         assert!(cache.get_url("upd_cache").is_none());
-        let after = get_url_by_code_cached(&pool, &cache, "upd_cache").unwrap();
+        let after = get_url_by_code_cached_with_metrics(&pool, &cache, "upd_cache", None).unwrap();
         assert_eq!(after.original_url, "https://updated.com");
     }
 
@@ -1063,7 +1036,7 @@ mod tests {
         let update = UpdateUrlRequest {
             url: "https://updated.com".to_string(),
         };
-        let updated = update_url(&pool, created.id, user.id, &update).unwrap();
+        let updated = update_url_with_cache(&pool, None, created.id, user.id, &update).unwrap();
 
         assert_ne!(updated.updated_at, created.updated_at);
     }

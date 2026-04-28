@@ -80,19 +80,6 @@ pub fn register_user(pool: &DbPool, email: &str) -> Result<(User, String), AppEr
     Ok((user, api_key))
 }
 
-/// Get a user by ID
-pub fn get_user_by_id(pool: &DbPool, user_id: i64) -> Result<User, AppError> {
-    let conn = get_conn(pool)?;
-
-    conn.query_row(Users::SELECT_BY_ID, params![user_id], map_user_row)
-        .map_err(|e| match e {
-            rusqlite::Error::QueryReturnedNoRows => {
-                AppError::NotFound(format!("User with ID '{}' not found", user_id))
-            }
-            _ => AppError::DatabaseError(e.to_string()),
-        })
-}
-
 // ============================================================================
 // API Key Management
 // ============================================================================
@@ -138,18 +125,6 @@ pub fn validate_api_key(pool: &DbPool, api_key: &str) -> Result<(i64, i64), AppE
     conn.execute(ApiKeys::UPDATE_LAST_USED, params![key_id])?;
 
     Ok((user_id, key_id))
-}
-
-/// Validate an API key with caching
-///
-/// Checks the cache first, then falls back to the database on cache miss.
-/// Updates the last_used_at timestamp on cache hits periodically (not on every request).
-pub fn validate_api_key_cached(
-    pool: &DbPool,
-    cache: &AppCache,
-    api_key: &str,
-) -> Result<(i64, i64), AppError> {
-    validate_api_key_cached_with_metrics(pool, cache, api_key, None)
 }
 
 /// Validate an API key with caching and optional metrics recording
@@ -233,11 +208,6 @@ pub fn list_api_keys(pool: &DbPool, user_id: i64) -> Result<Vec<ApiKeyRecord>, A
         .collect::<Result<Vec<_>, _>>()?;
 
     Ok(keys)
-}
-
-/// Revoke an API key
-pub fn revoke_api_key(pool: &DbPool, user_id: i64, key_id: i64) -> Result<(), AppError> {
-    revoke_api_key_with_cache(pool, None, user_id, key_id)
 }
 
 /// Revoke an API key with cache invalidation
@@ -362,7 +332,7 @@ mod tests {
         assert!(validate_api_key(&pool, &api_key).is_ok());
 
         // Revoke key
-        revoke_api_key(&pool, user.id, record.id).unwrap();
+        revoke_api_key_with_cache(&pool, None, user.id, record.id).unwrap();
 
         // Verify key no longer works
         let result = validate_api_key(&pool, &api_key);
@@ -379,14 +349,14 @@ mod tests {
 
         // First call - cache miss
         assert!(cache.get_api_key(&key_hash).is_none());
-        let (user_id1, key_id1) = validate_api_key_cached(&pool, &cache, &api_key).unwrap();
+        let (user_id1, key_id1) = validate_api_key_cached_with_metrics(&pool, &cache, &api_key, None).unwrap();
         assert_eq!(user_id1, user.id);
 
         // Verify it's now in the cache
         assert!(cache.get_api_key(&key_hash).is_some());
 
         // Second call - cache hit
-        let (user_id2, key_id2) = validate_api_key_cached(&pool, &cache, &api_key).unwrap();
+        let (user_id2, key_id2) = validate_api_key_cached_with_metrics(&pool, &cache, &api_key, None).unwrap();
         assert_eq!(user_id2, user.id);
         assert_eq!(key_id1, key_id2);
     }
@@ -396,7 +366,7 @@ mod tests {
         let pool = setup_test_db();
         let cache = AppCache::default();
 
-        let result = validate_api_key_cached(&pool, &cache, "usk_invalid_key");
+        let result = validate_api_key_cached_with_metrics(&pool, &cache, "usk_invalid_key", None);
         assert!(matches!(result, Err(AppError::Unauthorized(_))));
 
         // Invalid keys should not be cached
@@ -414,7 +384,7 @@ mod tests {
         let key_hash = hash_api_key(&api_key);
 
         // Populate the cache
-        validate_api_key_cached(&pool, &cache, &api_key).unwrap();
+        validate_api_key_cached_with_metrics(&pool, &cache, &api_key, None).unwrap();
         assert!(cache.get_api_key(&key_hash).is_some());
 
         // Revoke with cache invalidation
@@ -424,7 +394,7 @@ mod tests {
         assert!(cache.get_api_key(&key_hash).is_none());
 
         // Should return unauthorized now
-        let result = validate_api_key_cached(&pool, &cache, &api_key);
+        let result = validate_api_key_cached_with_metrics(&pool, &cache, &api_key, None);
         assert!(matches!(result, Err(AppError::Unauthorized(_))));
     }
 
@@ -455,7 +425,7 @@ mod tests {
         let key_hash = hash_api_key(&api_key);
 
         // Populate cache
-        let (user_id, key_id) = validate_api_key_cached(&pool, &cache, &api_key).unwrap();
+        let (user_id, key_id) = validate_api_key_cached_with_metrics(&pool, &cache, &api_key, None).unwrap();
 
         // Verify cached data is correct
         let cached = cache.get_api_key(&key_hash).unwrap();
@@ -514,7 +484,7 @@ mod tests {
         let key_hash = hash_api_key(&api_key);
 
         // Populate cache via a normal validation
-        let (user_id, key_id) = validate_api_key_cached(&pool, &cache, &api_key).unwrap();
+        let (user_id, key_id) = validate_api_key_cached_with_metrics(&pool, &cache, &api_key, None).unwrap();
         assert_eq!(user_id, user.id);
 
         // Manually set last_validated_at to 6 minutes ago to simulate staleness
@@ -534,7 +504,7 @@ mod tests {
         .unwrap();
 
         // Validate again — should trigger last_used_at refresh
-        let (user_id2, key_id2) = validate_api_key_cached(&pool, &cache, &api_key).unwrap();
+        let (user_id2, key_id2) = validate_api_key_cached_with_metrics(&pool, &cache, &api_key, None).unwrap();
         assert_eq!(user_id2, user.id);
         assert_eq!(key_id2, key_id);
 
