@@ -7,8 +7,8 @@ use image::{ImageBuffer, Luma};
 use qrcode::QrCode;
 use std::io::Cursor;
 
-use crate::constants::DEFAULT_QR_SIZE;
-use crate::errors::AppError;
+use crate::infra::constants::DEFAULT_QR_SIZE;
+use crate::infra::errors::AppError;
 
 /// QR code output format
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]

@@ -4,17 +4,17 @@ use actix_web::{delete, get, post, put, web, HttpResponse};
 use validator::Validate;
 
 use crate::auth::AuthenticatedUser;
-use crate::cache::AppCache;
-use crate::config::Config;
-use crate::constants::{DEFAULT_PAGE_LIMIT, DEFAULT_QR_SIZE, DEFAULT_RECENT_CLICKS_LIMIT, MAX_PAGE_LIMIT, MAX_QR_SIZE, MIN_QR_SIZE};
-use crate::db::DbPool;
-use crate::errors::AppError;
-use crate::metrics::AppMetrics;
+use crate::infra::cache::AppCache;
+use crate::infra::config::Config;
+use crate::infra::constants::{DEFAULT_PAGE_LIMIT, DEFAULT_QR_SIZE, DEFAULT_RECENT_CLICKS_LIMIT, MAX_PAGE_LIMIT, MAX_QR_SIZE, MIN_QR_SIZE};
+use crate::infra::db::DbPool;
+use crate::infra::errors::AppError;
+use crate::infra::metrics::AppMetrics;
 use crate::models::{
     CreateUrlRequest, CreateUrlResponse, ListUrlsQuery, MessageResponse, QrCodeQuery,
     SearchUrlsQuery, UpdateUrlRequest, UrlListResponse, UrlResponse,
 };
-use crate::qr::{self, QrFormat, QrOptions};
+use crate::infra::qr::{self, QrFormat, QrOptions};
 use crate::services;
 
 /// Validate that a URL uses http or https scheme

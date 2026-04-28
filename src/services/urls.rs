@@ -4,11 +4,11 @@ use chrono::{Duration, Utc};
 use rusqlite::params;
 
 use super::helpers::generate_short_code;
-use crate::cache::{AppCache, CachedUrl};
-use crate::constants::{DEFAULT_PAGE_LIMIT, MAX_CODE_GENERATION_RETRIES, MAX_PAGE_LIMIT};
-use crate::db::{get_conn, DbPool};
-use crate::errors::AppError;
-use crate::metrics::AppMetrics;
+use crate::infra::cache::{AppCache, CachedUrl};
+use crate::infra::constants::{DEFAULT_PAGE_LIMIT, MAX_CODE_GENERATION_RETRIES, MAX_PAGE_LIMIT};
+use crate::infra::db::{get_conn, DbPool};
+use crate::infra::errors::AppError;
+use crate::infra::metrics::AppMetrics;
 use crate::models::{CreateUrlRequest, ListUrlsQuery, UpdateUrlRequest, Url};
 use crate::queries::Urls;
 
@@ -400,8 +400,8 @@ pub fn update_url_with_cache(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::cache::AppCache;
-    use crate::metrics::AppMetrics;
+    use crate::infra::cache::AppCache;
+    use crate::infra::metrics::AppMetrics;
     use crate::services::register_user;
     use crate::test_utils::setup_test_db;
 

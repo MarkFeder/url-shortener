@@ -3,9 +3,9 @@
 use actix_web::{get, web, HttpResponse};
 
 use crate::auth::AuthenticatedUser;
-use crate::constants::MAX_ANALYTICS_RESULTS;
-use crate::db::DbPool;
-use crate::errors::AppError;
+use crate::infra::constants::MAX_ANALYTICS_RESULTS;
+use crate::infra::db::DbPool;
+use crate::infra::errors::AppError;
 use crate::models::{
     BreakdownQuery, BrowserBreakdownResponse, DeviceBreakdownResponse,
     ReferrerBreakdownResponse, TimelineQuery, TimelineResponse,

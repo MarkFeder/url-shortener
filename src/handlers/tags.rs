@@ -4,9 +4,9 @@ use actix_web::{delete, get, post, web, HttpResponse};
 use validator::Validate;
 
 use crate::auth::AuthenticatedUser;
-use crate::config::Config;
-use crate::db::DbPool;
-use crate::errors::AppError;
+use crate::infra::config::Config;
+use crate::infra::db::DbPool;
+use crate::infra::errors::AppError;
 use crate::models::{
     AddTagToUrlRequest, CreateTagRequest, MessageResponse, TagListResponse, TagResponse,
     UrlWithTagsResponse, UrlsByTagResponse,

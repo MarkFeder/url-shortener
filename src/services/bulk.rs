@@ -1,8 +1,8 @@
 //! Bulk create and delete operations for URLs.
 
-use crate::cache::AppCache;
-use crate::db::DbPool;
-use crate::errors::AppError;
+use crate::infra::cache::AppCache;
+use crate::infra::db::DbPool;
+use crate::infra::errors::AppError;
 use crate::models::{
     BulkCreateItemResult, BulkCreateUrlItem, BulkCreateUrlResponse, BulkDeleteItemResult,
     BulkDeleteUrlResponse, BulkItemError, BulkOperationStatus, CreateUrlRequest, CreateUrlResponse,
@@ -180,7 +180,7 @@ pub fn bulk_delete_urls_with_cache(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::cache::AppCache;
+    use crate::infra::cache::AppCache;
     use crate::models::{BulkCreateUrlItem, CreateUrlRequest};
     use crate::services::{create_url, get_url_by_code, get_url_by_id, register_user};
     use crate::test_utils::setup_test_db;

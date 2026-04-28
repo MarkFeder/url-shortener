@@ -5,10 +5,10 @@
 
 #![cfg(test)]
 
-use crate::cache::AppCache;
-use crate::config::Config;
-use crate::constants::TEST_DB_URL;
-use crate::db::{init_pool, run_migrations, DbPool};
+use crate::infra::cache::AppCache;
+use crate::infra::config::Config;
+use crate::infra::constants::TEST_DB_URL;
+use crate::infra::db::{init_pool, run_migrations, DbPool};
 
 /// Create an in-memory database pool for testing.
 ///

@@ -8,8 +8,8 @@ use rand::Rng;
 use rusqlite::params;
 use sha2::{Digest, Sha256};
 
-use crate::constants::{API_KEY_PREFIX, API_KEY_RANDOM_LENGTH, SHORT_CODE_ALPHABET};
-use crate::errors::AppError;
+use crate::infra::constants::{API_KEY_PREFIX, API_KEY_RANDOM_LENGTH, SHORT_CODE_ALPHABET};
+use crate::infra::errors::AppError;
 
 /// Check if a resource exists and belongs to the user
 pub(super) fn check_ownership(

@@ -5,7 +5,7 @@ use validator::Validate;
 
 use super::db::Url;
 use super::validators::{validate_alphanumeric, validate_positive_hours};
-use crate::constants::{DEFAULT_PAGE_LIMIT, DEFAULT_SORT_ORDER};
+use crate::infra::constants::{DEFAULT_PAGE_LIMIT, DEFAULT_SORT_ORDER};
 
 /// Request body for creating a new short URL
 #[derive(Debug, Clone, Deserialize, Validate)]

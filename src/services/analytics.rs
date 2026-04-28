@@ -3,8 +3,8 @@
 use chrono::{Duration, Utc};
 use rusqlite::params;
 
-use crate::db::{get_conn, DbPool};
-use crate::errors::AppError;
+use crate::infra::db::{get_conn, DbPool};
+use crate::infra::errors::AppError;
 use crate::models::{BreakdownEntry, ClickLog, TimelineBucket};
 use crate::queries::{ClickLogs, Urls};
 
@@ -260,7 +260,7 @@ pub fn cleanup_old_click_logs(pool: &DbPool, retention_days: u64) -> Result<usiz
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::db::get_conn;
+    use crate::infra::db::get_conn;
     use crate::models::CreateUrlRequest;
     use crate::services::{create_url, register_user};
     use crate::test_utils::setup_test_db;
@@ -544,7 +544,7 @@ mod tests {
     #[test]
     fn test_metrics_record_redirect() {
         let registry = prometheus::Registry::new();
-        let metrics = crate::metrics::AppMetrics::new(&registry).unwrap();
+        let metrics = crate::infra::metrics::AppMetrics::new(&registry).unwrap();
 
         assert_eq!(metrics.redirects_total.get() as u64, 0);
 

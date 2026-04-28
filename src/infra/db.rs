@@ -5,7 +5,7 @@
 use r2d2::{Pool, PooledConnection};
 use r2d2_sqlite::SqliteConnectionManager;
 
-use crate::errors::AppError;
+use crate::infra::errors::AppError;
 use crate::queries::Schema;
 
 /// Type alias for the SQLite connection pool

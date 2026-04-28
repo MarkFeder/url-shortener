@@ -4,10 +4,10 @@ use actix_web::{delete, post, web, HttpResponse};
 use validator::Validate;
 
 use crate::auth::AuthenticatedUser;
-use crate::cache::AppCache;
-use crate::config::Config;
-use crate::db::DbPool;
-use crate::errors::AppError;
+use crate::infra::cache::AppCache;
+use crate::infra::config::Config;
+use crate::infra::db::DbPool;
+use crate::infra::errors::AppError;
 use crate::models::{BulkCreateUrlRequest, BulkDeleteUrlRequest, BulkOperationStatus};
 use crate::services;
 

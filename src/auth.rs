@@ -5,10 +5,10 @@
 use actix_web::{dev::Payload, web, FromRequest, HttpRequest};
 use std::future::{ready, Ready};
 
-use crate::cache::AppCache;
-use crate::db::DbPool;
-use crate::errors::AppError;
-use crate::metrics::AppMetrics;
+use crate::infra::cache::AppCache;
+use crate::infra::db::DbPool;
+use crate::infra::errors::AppError;
+use crate::infra::metrics::AppMetrics;
 use crate::services;
 
 /// Authenticated user extractor for protecting endpoints.

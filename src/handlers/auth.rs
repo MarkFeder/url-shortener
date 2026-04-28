@@ -4,9 +4,9 @@ use actix_web::{delete, get, post, web, HttpResponse};
 use validator::Validate;
 
 use crate::auth::AuthenticatedUser;
-use crate::cache::AppCache;
-use crate::db::DbPool;
-use crate::errors::AppError;
+use crate::infra::cache::AppCache;
+use crate::infra::db::DbPool;
+use crate::infra::errors::AppError;
 use crate::models::{
     ApiKeyListResponse, ApiKeyResponse, CreateApiKeyRequest, CreateApiKeyResponse,
     MessageResponse, RegisterRequest, RegisterResponse,

@@ -2,7 +2,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::constants::DEFAULT_ANALYTICS_PERIOD;
+use crate::infra::constants::DEFAULT_ANALYTICS_PERIOD;
 
 /// Query parameters for analytics timeline endpoint
 #[derive(Debug, Clone, Deserialize)]

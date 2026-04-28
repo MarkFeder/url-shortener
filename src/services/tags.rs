@@ -4,8 +4,8 @@ use rusqlite::params;
 
 use super::helpers::check_ownership;
 use super::urls::map_url_row;
-use crate::db::{get_conn, DbPool};
-use crate::errors::AppError;
+use crate::infra::db::{get_conn, DbPool};
+use crate::infra::errors::AppError;
 use crate::models::{Tag, Url};
 use crate::queries::{Tags, UrlTags, Urls};
 

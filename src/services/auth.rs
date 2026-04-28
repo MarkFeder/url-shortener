@@ -5,11 +5,11 @@ use std::time::Instant;
 use rusqlite::params;
 
 use super::helpers::{generate_api_key, hash_api_key};
-use crate::cache::{AppCache, CachedApiKey};
-use crate::constants::DEFAULT_API_KEY_NAME;
-use crate::db::{get_conn, DbPool};
-use crate::errors::AppError;
-use crate::metrics::AppMetrics;
+use crate::infra::cache::{AppCache, CachedApiKey};
+use crate::infra::constants::DEFAULT_API_KEY_NAME;
+use crate::infra::db::{get_conn, DbPool};
+use crate::infra::errors::AppError;
+use crate::infra::metrics::AppMetrics;
 use crate::models::{ApiKeyRecord, User};
 use crate::queries::{ApiKeys, Users};
 
@@ -296,8 +296,8 @@ pub fn revoke_api_key_with_cache(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::cache::AppCache;
-    use crate::metrics::AppMetrics;
+    use crate::infra::cache::AppCache;
+    use crate::infra::metrics::AppMetrics;
     use crate::test_utils::setup_test_db;
 
     #[test]
@@ -526,7 +526,7 @@ mod tests {
         cache.insert_api_key(&key_hash, stale_entry);
 
         // Clear last_used_at in DB so we can detect the refresh
-        let conn = crate::db::get_conn(&pool).unwrap();
+        let conn = crate::infra::db::get_conn(&pool).unwrap();
         conn.execute(
             "UPDATE api_keys SET last_used_at = NULL WHERE id = ?1",
             params![key_id],
