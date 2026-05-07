@@ -35,12 +35,24 @@ impl UrlTags {
     pub const DELETE: &'static str =
         "DELETE FROM url_tags WHERE url_id = ?1 AND tag_id = ?2";
 
-    pub const SELECT_URLS_BY_TAG: &'static str = "
-        SELECT u.id, u.short_code, u.original_url, u.clicks, u.created_at, u.updated_at, u.expires_at, u.user_id
+    /// Returns the paginated URLs-by-tag query with the specified sort order.
+    pub fn urls_by_tag_with_order(sort_order: &str) -> String {
+        format!(
+            "SELECT u.id, u.short_code, u.original_url, u.clicks, u.created_at, u.updated_at, u.expires_at, u.user_id
+             FROM urls u
+             INNER JOIN url_tags ut ON u.id = ut.url_id
+             WHERE ut.tag_id = ?1 AND u.user_id = ?2
+             ORDER BY u.created_at {}
+             LIMIT ?3 OFFSET ?4",
+            sort_order
+        )
+    }
+
+    pub const COUNT_URLS_BY_TAG: &'static str = "
+        SELECT COUNT(*)
         FROM urls u
         INNER JOIN url_tags ut ON u.id = ut.url_id
-        WHERE ut.tag_id = ?1 AND u.user_id = ?2
-        ORDER BY u.created_at DESC";
+        WHERE ut.tag_id = ?1 AND u.user_id = ?2";
 
     pub const COUNT_BY_URL_AND_TAG: &'static str =
         "SELECT COUNT(*) FROM url_tags WHERE url_id = ?1 AND tag_id = ?2";

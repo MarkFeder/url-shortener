@@ -4,9 +4,10 @@ use rusqlite::params;
 
 use super::helpers::check_ownership;
 use super::urls::map_url_row;
+use crate::infra::constants::{DEFAULT_PAGE_LIMIT, MAX_PAGE_LIMIT};
 use crate::infra::db::{get_conn, DbPool};
 use crate::infra::errors::AppError;
-use crate::models::{Tag, Url};
+use crate::models::{ListUrlsQuery, Tag, Url};
 use crate::queries::{Tags, UrlTags, Urls};
 
 /// Map a database row to a Tag struct
@@ -168,13 +169,34 @@ pub fn remove_tag_from_url(
     Ok(())
 }
 
-/// Get all URLs with a specific tag, including all tags for each URL
-/// This is an optimized version that avoids N+1 queries by fetching all tags
-/// for the URLs in a single additional query.
+/// Count URLs tagged with a specific tag, scoped to the given user.
+pub fn count_urls_by_tag(pool: &DbPool, tag_id: i64, user_id: i64) -> Result<usize, AppError> {
+    let conn = get_conn(pool)?;
+
+    if !check_ownership(&conn, Tags::COUNT_BY_ID_AND_USER, tag_id, user_id)? {
+        return Err(AppError::NotFound(format!(
+            "Tag with ID '{}' not found",
+            tag_id
+        )));
+    }
+
+    let count: i64 = conn.query_row(
+        UrlTags::COUNT_URLS_BY_TAG,
+        params![tag_id, user_id],
+        |row| row.get(0),
+    )?;
+    Ok(count as usize)
+}
+
+/// Get URLs with a specific tag (paginated), including all tags for each URL.
+///
+/// Avoids N+1 queries by fetching tags for the user's URLs in a single
+/// additional query.
 pub fn get_urls_by_tag_with_tags(
     pool: &DbPool,
     tag_id: i64,
     user_id: i64,
+    query: &ListUrlsQuery,
 ) -> Result<Vec<(Url, Vec<Tag>)>, AppError> {
     let conn = get_conn(pool)?;
 
@@ -186,10 +208,18 @@ pub fn get_urls_by_tag_with_tags(
         )));
     }
 
-    // First, get all URLs with this tag
-    let mut stmt = conn.prepare(UrlTags::SELECT_URLS_BY_TAG)?;
+    let page = query.page.unwrap_or(1).max(1);
+    let limit = query.limit.unwrap_or(DEFAULT_PAGE_LIMIT).min(MAX_PAGE_LIMIT);
+    let offset = (page - 1) * limit;
+    let sort_order = match query.sort.as_deref() {
+        Some("asc") => "ASC",
+        _ => "DESC",
+    };
+
+    let sql = UrlTags::urls_by_tag_with_order(sort_order);
+    let mut stmt = conn.prepare(&sql)?;
     let urls: Vec<Url> = stmt
-        .query_map(params![tag_id, user_id], map_url_row)?
+        .query_map(params![tag_id, user_id, limit, offset], map_url_row)?
         .collect::<Result<Vec<_>, _>>()?;
 
     if urls.is_empty() {
@@ -234,7 +264,7 @@ pub fn get_urls_by_tag_with_tags(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::models::CreateUrlRequest;
+    use crate::models::{CreateUrlRequest, ListUrlsQuery};
     use crate::services::{create_url, register_user};
     use crate::test_utils::setup_test_db;
 
@@ -319,7 +349,7 @@ mod tests {
         add_tag_to_url(&pool, url.id, tag.id, user.id).unwrap();
 
         // Verify tag is associated by listing URLs for that tag
-        let tagged = get_urls_by_tag_with_tags(&pool, tag.id, user.id).unwrap();
+        let tagged = get_urls_by_tag_with_tags(&pool, tag.id, user.id, &ListUrlsQuery::default()).unwrap();
         assert_eq!(tagged.len(), 1);
         assert_eq!(tagged[0].0.id, url.id);
         assert_eq!(tagged[0].1.len(), 1);
@@ -369,7 +399,7 @@ mod tests {
         remove_tag_from_url(&pool, url.id, tag.id, user.id).unwrap();
 
         // Verify tag is removed: URL no longer appears for this tag
-        let tagged = get_urls_by_tag_with_tags(&pool, tag.id, user.id).unwrap();
+        let tagged = get_urls_by_tag_with_tags(&pool, tag.id, user.id, &ListUrlsQuery::default()).unwrap();
         assert!(tagged.iter().all(|(u, _)| u.id != url.id));
     }
 
@@ -408,11 +438,11 @@ mod tests {
         add_tag_to_url(&pool, url3.id, other_tag.id, user.id).unwrap();
 
         // Get URLs by "Work" tag
-        let work_urls = get_urls_by_tag_with_tags(&pool, tag.id, user.id).unwrap();
+        let work_urls = get_urls_by_tag_with_tags(&pool, tag.id, user.id, &ListUrlsQuery::default()).unwrap();
         assert_eq!(work_urls.len(), 2);
 
         // Get URLs by "Personal" tag
-        let personal_urls = get_urls_by_tag_with_tags(&pool, other_tag.id, user.id).unwrap();
+        let personal_urls = get_urls_by_tag_with_tags(&pool, other_tag.id, user.id, &ListUrlsQuery::default()).unwrap();
         assert_eq!(personal_urls.len(), 1);
     }
 
@@ -436,7 +466,7 @@ mod tests {
         add_tag_to_url(&pool, url.id, tag2.id, user.id).unwrap();
 
         // Get URLs by "Work" tag with all tags included
-        let urls_with_tags = get_urls_by_tag_with_tags(&pool, tag1.id, user.id).unwrap();
+        let urls_with_tags = get_urls_by_tag_with_tags(&pool, tag1.id, user.id, &ListUrlsQuery::default()).unwrap();
         assert_eq!(urls_with_tags.len(), 1);
 
         let (returned_url, tags) = &urls_with_tags[0];
@@ -499,7 +529,7 @@ mod tests {
         delete_tag(&pool, tag_id, user.id).unwrap();
 
         // Tag is gone (cascade removed the url_tags row too)
-        let result = get_urls_by_tag_with_tags(&pool, tag_id, user.id);
+        let result = get_urls_by_tag_with_tags(&pool, tag_id, user.id, &ListUrlsQuery::default());
         assert!(matches!(result, Err(AppError::NotFound(_))));
     }
 }

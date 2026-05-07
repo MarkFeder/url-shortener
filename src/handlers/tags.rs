@@ -8,8 +8,8 @@ use crate::infra::config::Config;
 use crate::infra::db::DbPool;
 use crate::infra::errors::AppError;
 use crate::models::{
-    AddTagToUrlRequest, CreateTagRequest, MessageResponse, TagListResponse, TagResponse,
-    UrlWithTagsResponse, UrlsByTagResponse,
+    AddTagToUrlRequest, CreateTagRequest, ListUrlsQuery, MessageResponse, TagListResponse,
+    TagResponse, UrlWithTagsResponse, UrlsByTagResponse,
 };
 use crate::services;
 
@@ -86,17 +86,20 @@ pub(super) async fn remove_tag_from_url(
     Ok(HttpResponse::Ok().json(MessageResponse::new("Tag removed from URL successfully")))
 }
 
-/// Get all URLs with a specific tag
+/// Get URLs with a specific tag (paginated)
 #[get("/tags/{id}/urls")]
 pub(super) async fn get_urls_by_tag(
     user: AuthenticatedUser,
     pool: web::Data<DbPool>,
     config: web::Data<Config>,
     path: web::Path<i64>,
+    query: web::Query<ListUrlsQuery>,
 ) -> Result<HttpResponse, AppError> {
     let tag_id = path.into_inner();
 
-    let urls_with_tags = services::get_urls_by_tag_with_tags(&pool, tag_id, user.user_id)?;
+    let total = services::count_urls_by_tag(&pool, tag_id, user.user_id)?;
+    let urls_with_tags =
+        services::get_urls_by_tag_with_tags(&pool, tag_id, user.user_id, &query)?;
 
     let url_responses: Vec<UrlWithTagsResponse> = urls_with_tags
         .into_iter()
@@ -117,6 +120,7 @@ pub(super) async fn get_urls_by_tag(
         .collect();
 
     let response = UrlsByTagResponse {
+        total,
         urls: url_responses,
     };
 

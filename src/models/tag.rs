@@ -75,6 +75,8 @@ pub struct UrlWithTagsResponse {
 /// Response for listing URLs by tag
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UrlsByTagResponse {
+    /// Total count of URLs with this tag
+    pub total: usize,
     /// List of URLs
     pub urls: Vec<UrlWithTagsResponse>,
 }

@@ -562,7 +562,49 @@ mod tests {
         assert!(resp.status().is_success());
 
         let body: UrlsByTagResponse = test::read_body_json(resp).await;
+        assert_eq!(body.total, 2);
         assert_eq!(body.urls.len(), 2);
+    }
+
+    #[actix_rt::test]
+    async fn test_get_urls_by_tag_paginates() {
+        let pool = setup_test_pool();
+
+        let (user, api_key) = services::register_user(&pool, "test@example.com").unwrap();
+        let tag = services::create_tag(&pool, "Many", user.id).unwrap();
+
+        for i in 0..25 {
+            let request = CreateUrlRequest {
+                url: format!("https://example{}.com", i),
+                custom_code: Some(format!("paged{}", i)),
+                expires_in_hours: None,
+            };
+            let url = services::create_url(&pool, &request, 7, user.id).unwrap();
+            services::add_tag_to_url(&pool, url.id, tag.id, user.id).unwrap();
+        }
+
+        let app = setup_test_app(pool).await;
+
+        // Page 1, limit 10 -> 10 items, total reports the full 25
+        let req = test::TestRequest::get()
+            .uri(&format!("/api/tags/{}/urls?page=1&limit=10", tag.id))
+            .insert_header(("X-API-Key", api_key.clone()))
+            .to_request();
+        let resp: actix_web::dev::ServiceResponse = test::call_service(&app, req).await;
+        assert!(resp.status().is_success());
+        let body: UrlsByTagResponse = test::read_body_json(resp).await;
+        assert_eq!(body.total, 25);
+        assert_eq!(body.urls.len(), 10);
+
+        // Page 3, limit 10 -> 5 remaining
+        let req = test::TestRequest::get()
+            .uri(&format!("/api/tags/{}/urls?page=3&limit=10", tag.id))
+            .insert_header(("X-API-Key", api_key))
+            .to_request();
+        let resp: actix_web::dev::ServiceResponse = test::call_service(&app, req).await;
+        let body: UrlsByTagResponse = test::read_body_json(resp).await;
+        assert_eq!(body.total, 25);
+        assert_eq!(body.urls.len(), 5);
     }
 
     // ========================================================================
