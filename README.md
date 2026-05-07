@@ -1013,6 +1013,7 @@ Environment variables (set in `.env` file):
 | `METRICS_ENABLED` | `true` | Enable Prometheus metrics endpoint at /metrics |
 | `CLICK_LOGGING_ENABLED` | `true` | Enable/disable click logging on redirects |
 | `CLICK_RETENTION_DAYS` | *(none)* | Auto-delete click logs older than N days at startup |
+| `SHUTDOWN_TIMEOUT_SECS` | `30` | Drain timeout for in-flight requests on SIGTERM/SIGINT |
 
 ## Docker
 
@@ -1065,6 +1066,22 @@ The Docker image uses these default environment variables:
 | `METRICS_ENABLED` | `true` | Enable Prometheus metrics |
 
 Override any variable using `-e` flag or in `docker-compose.yml`.
+
+### Graceful Shutdown
+
+The server listens for `SIGTERM` and `SIGINT` (Ctrl+C). On signal it stops
+accepting new connections and waits up to `SHUTDOWN_TIMEOUT_SECS` (default
+30 s) for in-flight requests to finish before exiting.
+
+When running under Docker, set the orchestrator's grace period to match.
+Docker's default `stop_grace_period` is 10 s, which would cut requests
+short — bump it in `docker-compose.yml`:
+
+```yaml
+services:
+  url-shortener:
+    stop_grace_period: 35s   # SHUTDOWN_TIMEOUT_SECS + a small buffer
+```
 
 ### Production Deployment
 

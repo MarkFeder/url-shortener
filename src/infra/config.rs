@@ -31,6 +31,8 @@ pub struct Config {
     pub click_logging_enabled: bool,
     /// Optional retention period for click logs in days
     pub click_retention_days: Option<u64>,
+    /// Seconds to wait for in-flight requests to finish on SIGTERM/SIGINT
+    pub shutdown_timeout_secs: u64,
 }
 
 impl Config {
@@ -47,6 +49,7 @@ impl Config {
     /// - `API_KEY_CACHE_TTL_SECS`: API key cache TTL in seconds (default: 600)
     /// - `API_KEY_CACHE_MAX_CAPACITY`: API key cache max capacity (default: 1000)
     /// - `METRICS_ENABLED`: Enable Prometheus metrics endpoint (default: true)
+    /// - `SHUTDOWN_TIMEOUT_SECS`: Drain timeout on SIGTERM/SIGINT (default: 30)
     pub fn from_env() -> Self {
         let host = env::var("HOST").unwrap_or_else(|_| "127.0.0.1".to_string());
         let port: u16 = env::var("PORT")
@@ -93,6 +96,10 @@ impl Config {
             click_retention_days: env::var("CLICK_RETENTION_DAYS")
                 .ok()
                 .and_then(|v| v.parse().ok()),
+            shutdown_timeout_secs: env::var("SHUTDOWN_TIMEOUT_SECS")
+                .unwrap_or_else(|_| "30".to_string())
+                .parse()
+                .expect("SHUTDOWN_TIMEOUT_SECS must be a valid number"),
         }
     }
 }
@@ -112,6 +119,7 @@ impl Default for Config {
             metrics_enabled: true,
             click_logging_enabled: true,
             click_retention_days: None,
+            shutdown_timeout_secs: 30,
         }
     }
 }
@@ -134,5 +142,11 @@ mod tests {
         let config = Config::default();
         assert!(config.click_logging_enabled);
         assert_eq!(config.click_retention_days, None);
+    }
+
+    #[test]
+    fn test_default_shutdown_timeout() {
+        let config = Config::default();
+        assert_eq!(config.shutdown_timeout_secs, 30);
     }
 }

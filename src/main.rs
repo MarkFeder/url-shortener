@@ -90,8 +90,9 @@ async fn main() -> std::io::Result<()> {
     info!("   DELETE /api/urls/{{id}}       - Delete a URL");
     info!("   GET  /{{short_code}}          - Redirect to original URL");
 
-    // Capture bind address before moving config into closure
+    // Capture bind address and shutdown timeout before moving config into closure
     let bind_addr = format!("{}:{}", config.host, config.port);
+    let shutdown_timeout_secs = config.shutdown_timeout_secs;
 
     // Configure rate limiting: 60 requests per minute per IP
     // This protects against DoS attacks and API abuse
@@ -103,6 +104,10 @@ async fn main() -> std::io::Result<()> {
 
     info!("Rate limiting enabled: 60 requests/minute per IP");
     info!("Per-user API key authentication enabled");
+    info!(
+        "Graceful shutdown enabled: SIGTERM/SIGINT will drain in-flight requests for up to {}s",
+        shutdown_timeout_secs
+    );
 
     // Initialize Prometheus metrics if enabled
     let (prometheus_metrics, app_metrics) = if config.metrics_enabled {
@@ -121,48 +126,43 @@ async fn main() -> std::io::Result<()> {
         (None, None)
     };
 
-    // Start HTTP server based on whether metrics are enabled
-    if let (Some(prometheus_metrics), Some(app_metrics)) = (prometheus_metrics, app_metrics) {
+    // Start HTTP server based on whether metrics are enabled.
+    // HttpServer::run() returns once SIGTERM/SIGINT/Ctrl+C has been received and
+    // shutdown_timeout has either drained in-flight requests or elapsed.
+    let result = if let (Some(prometheus_metrics), Some(app_metrics)) =
+        (prometheus_metrics, app_metrics)
+    {
         HttpServer::new(move || {
             App::new()
-                // Add database pool to app state
                 .app_data(web::Data::new(pool.clone()))
-                // Add base URL to app state
                 .app_data(web::Data::new(config.clone()))
-                // Add cache to app state
                 .app_data(web::Data::new(app_cache.clone()))
-                // Add metrics to app state
                 .app_data(web::Data::new(app_metrics.clone()))
-                // Add Prometheus middleware
                 .wrap(prometheus_metrics.clone())
-                // Enable rate limiting middleware
                 .wrap(Governor::new(&governor_conf))
-                // Enable logger middleware
                 .wrap(Logger::default())
-                // Configure routes
                 .configure(handlers::configure_routes)
         })
         .bind(&bind_addr)?
+        .shutdown_timeout(shutdown_timeout_secs)
         .run()
         .await
     } else {
         HttpServer::new(move || {
             App::new()
-                // Add database pool to app state
                 .app_data(web::Data::new(pool.clone()))
-                // Add base URL to app state
                 .app_data(web::Data::new(config.clone()))
-                // Add cache to app state
                 .app_data(web::Data::new(app_cache.clone()))
-                // Enable rate limiting middleware
                 .wrap(Governor::new(&governor_conf))
-                // Enable logger middleware
                 .wrap(Logger::default())
-                // Configure routes
                 .configure(handlers::configure_routes)
         })
         .bind(&bind_addr)?
+        .shutdown_timeout(shutdown_timeout_secs)
         .run()
         .await
-    }
+    };
+
+    info!("Shutdown signal received, in-flight requests drained — server stopped");
+    result
 }

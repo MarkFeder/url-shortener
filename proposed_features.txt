@@ -69,9 +69,10 @@ PROPOSED REFACTORINGS (7)
    Generate an OpenAPI 3.0 spec (via utoipa or manual YAML) from the
    existing endpoints. Enables client generation and interactive docs.
 
-7. Graceful Shutdown
-   Ensure in-flight requests complete and any buffered analytics are
-   flushed on SIGTERM. Especially important for the Docker deployment.
+7. Graceful Shutdown                                          [DONE]
+   SIGTERM/SIGINT stop accepting new connections and drain in-flight
+   requests for up to SHUTDOWN_TIMEOUT_SECS (default 30s) before exit.
+   README documents Docker stop_grace_period alignment.
 
 
 PRIORITY MATRIX
